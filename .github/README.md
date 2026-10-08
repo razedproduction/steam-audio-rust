@@ -46,7 +46,6 @@ Planned scope, mirroring the feature areas of the original library. Boxes are ch
 - [ ] **Reflections**: real-time and baked sound propagation
 - [ ] **Pathing**: diffraction and occlusion-aware paths between source and listener
 - [ ] **C API compatibility layer**: drop-in replacement for the original `phonon` interface
-- [ ] **Engine integrations**: FMOD, Wwise, Unity, Unreal (long-term)
 
 ## Repository layout
 
