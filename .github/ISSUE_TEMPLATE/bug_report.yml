@@ -1,0 +1,30 @@
+name: Bug report
+description: Something behaves incorrectly or differs from the reference Steam Audio
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you expect, and what did you get instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal code or input data that triggers the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: reference
+    attributes:
+      label: Reference behavior
+      description: If this is a parity issue, what does the original C++ Steam Audio produce?
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      description: OS, Rust version (`rustc --version`), commit hash
+    validations:
+      required: true

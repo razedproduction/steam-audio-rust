@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    # Skips cleanly until a Cargo workspace exists at the repo root.
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect Cargo workspace
+        id: cargo
+        shell: bash
+        run: |
+          if [ -f Cargo.toml ]; then echo "present=true" >> "$GITHUB_OUTPUT"; else echo "present=false" >> "$GITHUB_OUTPUT"; fi
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.cargo.outputs.present == 'true'
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        if: steps.cargo.outputs.present == 'true'
+
+      - name: Format
+        if: steps.cargo.outputs.present == 'true'
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        if: steps.cargo.outputs.present == 'true'
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        if: steps.cargo.outputs.present == 'true'
+        run: cargo test --all
