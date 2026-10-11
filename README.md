@@ -45,6 +45,18 @@ Current stage (checked against golden data produced by the original C++; earlier
 
 The detailed plan, module order, per-module tolerances and known risks live in [`docs/PORTING_PLAN.md`](docs/PORTING_PLAN.md); intentional behaviour differences from upstream are listed in [`docs/DEVIATIONS.md`](docs/DEVIATIONS.md). Treat the roadmap below as intent, not a promise.
 
+### Notable deviations from upstream
+
+Full list with reasons: [`docs/DEVIATIONS.md`](docs/DEVIATIONS.md).
+
+- **Out of scope:** GPU backends (OpenCL, Radeon Rays, TrueAudioNext), vendor math libraries (IPP, MKL, vDSP, FFTS) and the Embree ray tracer.
+- **FFT:** built on `realfft`/`rustfft` instead of PFFFT, so FFT-based results are close but not bit-exact (within `1e-5` × peak).
+- **`f32` only:** upstream's `double` instantiations are unused and not ported.
+- **Panics instead of undefined behaviour:** out-of-range indices and shape or length mismatches, unchecked in upstream, panic; malformed `.hrtf` data returns an error.
+- **Upstream bugs fixed:** for example `SphericalHarmonics::legendre` for order 4 and above, which never terminates upstream.
+- **No hidden global state or `const` mutation:** upstream's mutable globals and in-place changes through `const` pointers become constants and explicit `&mut` arguments or constructor parameters.
+- **SIMD level:** results follow upstream's AVX code path on every platform.
+
 ## Roadmap
 
 Planned scope, mirroring the feature areas of the original library. Boxes are checked only when a module passes comparison tests against the reference implementation.
