@@ -97,6 +97,70 @@ fn sh_wrappers() {
     check("sh/legendre", &legendre, Tolerance::F32);
 }
 
+/// `P(n, x)` in `f64` from the explicit sum `2⁻ⁿ Σₖ (-1)ᵏ C(n, k) C(2n - 2k, n) xⁿ⁻²ᵏ` (Rodrigues' formula
+/// expanded), independent of the recurrence in `sh::legendre`. The coefficients are exact integers in `f64` for the
+/// orders tested here.
+fn legendre_reference(n: usize, x: f64) -> f64 {
+    fn binomial(n: usize, k: usize) -> f64 {
+        (0..k).fold(1.0, |c, i| c * (n - i) as f64 / (i + 1) as f64)
+    }
+    let sum: f64 = (0..=n / 2)
+        .map(|k| {
+            let sign = if k % 2 == 0 { 1.0 } else { -1.0 };
+            sign * binomial(n, k) * binomial(2 * n - 2 * k, n) * x.powi((n - 2 * k) as i32)
+        })
+        .sum();
+    sum / 2f64.powi(n as i32)
+}
+
+/// `sh::legendre` has no golden data for `n >= 4` (upstream never terminates there), so orders 0–8 are checked
+/// against the `f64` explicit polynomial on a grid of `[-1, 1]` plus its edges.
+///
+/// `|P(n, x)| <= 1` on `[-1, 1]`, so the error is bounded absolutely (relative error is unbounded at the roots). The
+/// measured worst case grows by about one `f32::EPSILON` per order (closed forms: 0.88 ε for `n = 2`, 1.73 ε for
+/// `n = 3`; recurrence: 2.89, 4.51, 5.46, 7.01, 7.84 ε for `n = 4..=8`), so 8 ε covers orders up to 8. The arithmetic
+/// is plain IEEE `f32` with no libm, so the measurement is the same on every platform.
+#[test]
+fn legendre_matches_f64_reference() {
+    const GRID: usize = 2000;
+    const MAX_N: usize = 8;
+    let tol = Tolerance::new(8.0 * f64::from(f32::EPSILON), 0.0);
+
+    let below_one = f32::from_bits(1.0_f32.to_bits() - 1);
+    let mut xs: Vec<f32> = (0..=GRID)
+        .map(|i| (-1.0 + 2.0 * i as f64 / GRID as f64) as f32)
+        .collect();
+    for x in [below_one, f32::EPSILON, f32::MIN_POSITIVE, 1e-30] {
+        xs.extend([x, -x]);
+    }
+
+    for n in 0..=MAX_N {
+        let actual: Vec<f64> = xs.iter().map(|&x| f64::from(sh::legendre(n, x))).collect();
+        let expected: Vec<f64> = xs
+            .iter()
+            .map(|&x| legendre_reference(n, f64::from(x)))
+            .collect();
+        if let Err(m) = compare(&actual, &expected, tol) {
+            panic!("legendre({n}, x): {m}");
+        }
+
+        // Exact identities: P(n, 1) = 1, P(n, -x) = (-1)ⁿ P(n, x), and odd orders vanish at 0.
+        let sign = if n % 2 == 0 { 1.0 } else { -1.0 };
+        assert_eq!(sh::legendre(n, 1.0), 1.0, "P({n}, 1)");
+        assert_eq!(sh::legendre(n, -1.0), sign, "P({n}, -1)");
+        for &x in &xs {
+            assert_eq!(
+                sh::legendre(n, -x),
+                sign * sh::legendre(n, x),
+                "P({n}, ±{x})"
+            );
+        }
+        if n % 2 == 1 {
+            assert_eq!(sh::legendre(n, 0.0), 0.0, "P({n}, 0)");
+        }
+    }
+}
+
 #[test]
 fn sh_basis() {
     let mut lcg = Lcg::new(19);
