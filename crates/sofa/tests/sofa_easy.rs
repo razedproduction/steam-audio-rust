@@ -163,10 +163,14 @@ fn resampling_edge_cases() {
 
 #[test]
 fn resampling_limits() {
-    // Upsampling from 1 Hz makes 48000 × 200 samples per response: more than 2^27 values in all.
+    // Upsampling from 1 Hz makes 48000 × 200 samples per response: more than 2^29 values in all.
     let mut hrtf = load("cipic_124");
     hrtf.data_sampling_rate.values.as_mut().unwrap()[0] = 1.0;
     assert!(matches!(hrtf.resample(48000.0), Err(Error::ResourceLimit)));
+    // The highest real rate is well within both limits.
+    let mut hrtf = load("cipic_124");
+    hrtf.resample(192_000.0).expect("resamples to 192 kHz");
+    assert_eq!(hrtf.n, 871);
     // Downsampling by more than 64:1 needs a filter longer than 2^14 taps.
     let mut hrtf = load("cipic_124");
     hrtf.data_sampling_rate.values.as_mut().unwrap()[0] = 8000.0 * 65.0;

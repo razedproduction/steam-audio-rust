@@ -23,7 +23,8 @@ pub(crate) struct Reader<'a> {
     pos: u64,
     /// The process-wide `errno` as libmysofa sees it: 0 until a seek fails.
     pub errno: i32,
-    /// Bytes still allowed to be consumed (not in upstream; bounds the work on malicious input).
+    /// Bytes still allowed to be consumed (not in upstream; bounds the work on malicious input). Starts at 16 times
+    /// the input plus 1 MiB; real files consume at most 0.9993 times their size (each byte read about once).
     budget: u64,
     pub exhausted: bool,
 

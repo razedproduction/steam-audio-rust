@@ -13,6 +13,7 @@ pub const DEFAULT_RADIUS_STEP: f32 = 0.01;
 const MAX_SEARCH_ANGLE: f32 = 45.0;
 /// The port's bound on the steps of one search (`docs/DEVIATIONS.md`). Upstream's radius searches run until the
 /// test radius passes the largest measured one, which takes forever when the radius stops growing in `float`.
+/// Real files take at most 90 steps (an angular search, 45° in 0.5° steps); radius searches at most 51.
 const MAX_SEARCH_STEPS: u32 = 1 << 12;
 
 /// The neighbours of a measurement, in the order `[+azimuth, −azimuth, +elevation, −elevation, +radius, −radius]`;

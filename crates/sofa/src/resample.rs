@@ -3,8 +3,11 @@
 use crate::speex::Resampler;
 use crate::{Error, Hrtf};
 
-/// The port's bound on the number of resampled values, 512 MiB of `f32` (`docs/DEVIATIONS.md`).
-const MAX_RESAMPLED_VALUES: u64 = 1 << 27;
+/// The port's bound on the number of resampled values, 2 GiB of `f32` (`docs/DEVIATIONS.md`): no larger than the
+/// biggest dataset the loader accepts, so resampling allocates no more than loading can. The largest real file
+/// (libmysofa's `latTestAziBeRTA_Resamp1_Fran`, 41527 measurements at 48 kHz) needs 2^25.3 values at 96 kHz and
+/// 2^26.3 at 192 kHz.
+const MAX_RESAMPLED_VALUES: u64 = 1 << 29;
 
 /// MSVC x64's conversion of a floating-point value to `unsigned int`: through a 64-bit signed integer, keeping the
 /// low 32 bits, with NaN and values outside the `i64` range giving 0.
@@ -26,7 +29,7 @@ impl Hrtf {
     /// [`Error::InvalidFormat`] if `sample_rate` is below 8000 Hz, there is not exactly one sampling rate, or the
     /// responses are not `M × R × N` values; with [`Error::Resampler`] if the resampler rejects the rates (they are
     /// truncated to integers first, as upstream); and with [`Error::ResourceLimit`] beyond the port's limits on the
-    /// filter (downsampling by more than 64:1) and output (2^27 values) sizes.
+    /// filter (downsampling by more than 64:1) and output (2^29 values) sizes.
     pub fn resample(&mut self, sample_rate: f32) -> Result<(), Error> {
         let rate = match self.data_sampling_rate.values.as_deref() {
             Some(&[rate]) => rate,

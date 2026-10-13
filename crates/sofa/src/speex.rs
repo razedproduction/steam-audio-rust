@@ -25,7 +25,9 @@ const BUFFER_SIZE: u32 = 160;
 /// `INT_MAX / sizeof(spx_word16_t)`, computed in `size_t`.
 const MAX_FLOATS: u64 = 2_147_483_647 / 4;
 
-/// The port's bound on the filter length, reached when downsampling by more than 64:1 (`docs/DEVIATIONS.md`).
+/// The port's bound on the filter length, reached when downsampling by more than 64:1 (`docs/DEVIATIONS.md`). The
+/// length depends only on the ratio (about 256 taps per unit): 280 from 48 to 44.1 kHz, 1536 from 48 to 8 kHz and
+/// 6144 for the extreme 192 to 8 kHz.
 pub(crate) const MAX_FILTER_LENGTH: u32 = 1 << 14;
 
 /// `kaiser12_table`.
