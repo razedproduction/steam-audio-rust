@@ -352,6 +352,41 @@ fn binaural_output_is_finite() {
     }
 }
 
+/// An effect of maximum order 4 weights its tail with `legendre(4, cosine)` (upstream never terminates there). The
+/// Ambisonics HRTFs stop at order 3, so only order 3 can be applied; the tail must still be finite and audible.
+#[test]
+fn binaural_order4_tail_is_finite() {
+    let frame_size = 256;
+    let database = make_database(SAMPLING_RATE, frame_size);
+    let audio_settings = AudioSettings::new(SAMPLING_RATE, frame_size);
+    let mut effect = AmbisonicsBinauralEffect::new(&audio_settings, 4, &database);
+
+    let mut input = AudioBuffer::new(num_coeffs_for_order(3), frame_size);
+    for (i, s) in input.as_mut_slice().iter_mut().enumerate() {
+        *s = (i as f32 * 0.01).sin();
+    }
+    let mut out = AudioBuffer::new(2, frame_size);
+    effect.apply(&database, 3, &input, &mut out);
+
+    effect.tail(&mut out);
+    assert!(out.as_slice().iter().all(|s| s.is_finite()));
+    assert!(out.as_slice().iter().any(|&s| s != 0.0));
+}
+
+/// Applying order 4 evaluates `legendre(4, cosine)` and then panics on the missing order-4 HRTF (upstream overflows
+/// the stack in `legendre` first). A stack overflow would abort the test process instead of panicking.
+#[test]
+#[should_panic(expected = "Ambisonics coefficient out of range")]
+fn binaural_order4_apply_needs_order4_hrtf() {
+    let frame_size = 256;
+    let database = make_database(SAMPLING_RATE, frame_size);
+    let audio_settings = AudioSettings::new(SAMPLING_RATE, frame_size);
+    let mut effect = AmbisonicsBinauralEffect::new(&audio_settings, 4, &database);
+    let input = AudioBuffer::new(num_coeffs_for_order(4), frame_size);
+    let mut out = AudioBuffer::new(2, frame_size);
+    effect.apply(&database, 4, &input, &mut out);
+}
+
 // ---------------------------------------------------------------------------------------------------------------------
 // Decode
 // ---------------------------------------------------------------------------------------------------------------------
