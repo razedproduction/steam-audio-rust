@@ -7,11 +7,11 @@ use super::reader::{Reader, c_string};
 use crate::{Attribute, Error};
 
 /// Datatype message nesting (lists and compound members) deeper than this is rejected. Not in upstream, which
-/// recurses until the stack overflows.
+/// recurses until the stack overflows. Real files nest one level.
 const MAX_DATATYPE_DEPTH: u32 = 32;
 
 /// Attribute values with more elements than this are rejected. Not in upstream, where an element that consumes no
-/// bytes (an empty string, say) repeated 2^64 times never finishes.
+/// bytes (an empty string, say) repeated 2^64 times never finishes. Real attributes have at most 9 elements.
 const MAX_ATTRIBUTE_ELEMENTS: u64 = 1 << 20;
 
 /// Upstream `struct DATATYPE`. The integer and floating-point members of its union share `bit_offset` and

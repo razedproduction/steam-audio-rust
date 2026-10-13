@@ -6,7 +6,7 @@ use super::reader::{Reader, c_string, msvc_f32_to_i32, msvc_f64_to_i32};
 use crate::{Attribute, Error};
 
 /// Indirect blocks nested deeper than this are rejected. Not in upstream, where a block pointing to itself
-/// recurses until the stack overflows.
+/// recurses until the stack overflows. Real files have at most the root indirect block, nothing nested.
 const MAX_INDIRECT_DEPTH: u32 = 32;
 
 const MAX_NAME_LENGTH: usize = 0x100;
