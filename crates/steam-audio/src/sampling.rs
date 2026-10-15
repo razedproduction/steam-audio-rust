@@ -1,7 +1,7 @@
 //! Deterministic low-discrepancy direction and point sets (upstream `sampling.{h,cpp}`).
 //!
-//! Upstream's `RandomNumberGenerator` is seeded with the wall clock and only used by the reflection simulator; it is
-//! ported with that stage.
+//! Upstream's `RandomNumberGenerator`, seeded with the wall clock and used by the reflection simulator, is the
+//! crate-private `random::Mt19937`, seeded explicitly.
 
 use crate::geometry::Sphere;
 use crate::math::{CoordinateSpace3, PI, Vector3, cpp_max, cpp_min};

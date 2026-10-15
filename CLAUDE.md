@@ -70,6 +70,8 @@ Goldens are generated **only with MSVC on Windows x64** (upstream RNG and libm a
 - In generators, allocate upstream objects with `ipl::make_unique` (or on the stack), not `std::make_unique`: for
   32-byte-aligned classes (anything holding IIR filterers, e.g. `ReverbEffect`) the C++17 aligned `new` corrupted the
   heap in the reference build.
+- To set private upstream state in a generator (e.g. reseeding the clock-seeded `RandomNumberGenerator`s), use
+  explicit template instantiation of a member pointer, which skips access checks (`reflection_simulator.cpp`).
 - `std::sort` is unstable and its tie order is MSVC's own: where equal keys matter (BVH build), use the crate-private
   port `scene::msvc_sort::sort`, not `sort_unstable_by` (risk R21).
 

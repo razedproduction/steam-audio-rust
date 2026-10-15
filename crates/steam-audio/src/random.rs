@@ -1,7 +1,7 @@
 //! Ports of the MSVC C and C++ library random number generators that upstream relies on (risk R2 in
 //! `docs/PORTING_PLAN.md`): the C library's `rand()` ([`CRand`]), and, crate-private, `std::default_random_engine`,
-//! which is `std::mt19937` on MSVC, with `std::uniform_real_distribution<float>` as implemented by MSVC's `<random>`
-//! (VS 2022 17.14).
+//! which is `std::mt19937` on MSVC, with `std::uniform_real_distribution<float>` and
+//! `std::uniform_int_distribution<int>` as implemented by MSVC's `<random>` (VS 2022 17.14).
 
 /// The state of the C library's `rand()` as MSVC implements it: a 32-bit LCG returning bits 16–30 of each new state.
 ///
@@ -83,6 +83,13 @@ impl Mt19937 {
     pub(crate) fn uniform_f32(&mut self, min: f32, max: f32) -> f32 {
         let u = (self.next_u32() >> 8) as f32 * (1.0 / 16_777_216.0);
         u * (max - min) + min
+    }
+
+    /// `std::uniform_int_distribution<int>(0, INT_MAX)` applied to this engine. MSVC multiplies one draw by the range
+    /// size, 2^31, and keeps the high 32 bits (Lemire's method; nothing is ever rejected for this range), which is the
+    /// draw shifted right by one.
+    pub(crate) fn uniform_int(&mut self) -> i32 {
+        (self.next_u32() >> 1) as i32
     }
 
     fn twist(&mut self) {
