@@ -52,10 +52,14 @@ This document is the source of truth for the port. Update the status table in §
   - `crates/parity`: test support (golden `.npy` loading, `Tolerance`, `assert_close`). Not published.
   - `crates/sofa`: SOFA/HDF5 loader (ADR 0001).
   - `crates/phonon-capi`: C ABI (stage 8).
-  - Engine integration (stage 9) is the `pragma.component-audio` component of the
-    [pragma.core](https://github.com/razedproduction/pragma.core) ecosystem: a separate crate,
-    `pragma_component_audio`, in its own repository that depends on `steam-audio`, not a fork. The core stays engine-agnostic: no engine dependency, no globals,
-    `Send` types, and non-allocating `&mut self` processing.
+  - Engine integrations (stage 9), both thin layers over the same core:
+    - `crates/bevy_steam_audio`: Bevy integration (9a).
+    - `pragma_component_audio`: the `pragma.component-audio` component of the
+      [pragma.core](https://github.com/razedproduction/pragma.core) ecosystem (9b), a separate crate in its own
+      repository that depends on `steam-audio`, not a fork.
+
+    The core stays engine-agnostic: no engine dependency, no globals, `Send` types, and non-allocating
+    `&mut self` processing. Anything both integrations need goes into the core as an engine-neutral API.
 - **Tools:** `tools/golden`, a C++ program linked against `core/` that writes `.npy` files to `testdata/golden/`.
 - **Errors:** `steam_audio::Error` (`thiserror`), mapping 1:1 onto `IPLerror` at the C API.
 - **Polymorphism:** a closed set of backends becomes an `enum`. Extension points the user implements
@@ -99,7 +103,8 @@ Order: leaves first. A box is ticked only when the slice passes its parity tests
 | 6.4 | Probes, baked data, baking, `SimulationManager`, serialisation (energy fields, and mesh, static mesh and scene serialization, moved from 5) | `probe_*`, `baked_*`, `reflection_baker`, `simulation_*`, `serialized_object` | ☐ | ☐ | ☐ | R4 |
 | 7 | Pathing | `probe_tree`, `path_*` | ☐ | ☐ | ☐ | R2 |
 | 8 | C API (`phonon-capi`) | `api_*`, `phonon.h` | ☐ | ☐ | ☐ | upstream `itest` builds unchanged. Audio buffer bridging and precondition checks: R7 |
-| 9 | pragma.core integration (`pragma.component-audio`: crate `pragma_component_audio` in a separate repository, depending on `steam-audio`); an MVP is possible after stage 4 | — | ☐ | ☐ | — | — |
+| 9a | Bevy integration (`bevy_steam_audio`); an MVP is possible after stage 4 | — | ☐ | ☐ | — | — |
+| 9b | pragma.core integration (`pragma.component-audio`: crate `pragma_component_audio` in a separate repository, depending on `steam-audio`); an MVP is possible after stage 4 | — | ☐ | ☐ | — | — |
 
 ## 5. Verification plan
 
