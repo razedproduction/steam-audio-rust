@@ -22,6 +22,7 @@ add_executable(golden
     ${GOLDEN_DIR}/src/scene.cpp
     ${GOLDEN_DIR}/src/direct_simulator.cpp
     ${GOLDEN_DIR}/src/reconstructor.cpp
+    ${GOLDEN_DIR}/src/reverb.cpp
 )
 
 target_link_libraries(golden PRIVATE core hrtf)
