@@ -81,7 +81,7 @@ pub struct Bvh {
 
 /// A box grown with SSE `min`/`max` (upstream `GrowableBox`), which return the second operand when either is NaN.
 #[derive(Debug, Clone, Copy)]
-struct GrowableBox {
+pub(crate) struct GrowableBox {
     min: [f32; 3],
     max: [f32; 3],
 }
@@ -97,12 +97,20 @@ fn sse_max(a: f32, b: f32) -> f32 {
 }
 
 impl GrowableBox {
-    const EMPTY: Self = Self {
+    pub(crate) const EMPTY: Self = Self {
         min: [f32::MAX; 3],
         max: [-f32::MAX; 3],
     };
 
-    fn to_aabb(self) -> Aabb {
+    /// Upstream `load(Box)`.
+    pub(crate) fn from_aabb(aabb: &Aabb) -> Self {
+        Self {
+            min: aabb.min.to_array(),
+            max: aabb.max.to_array(),
+        }
+    }
+
+    pub(crate) fn to_aabb(self) -> Aabb {
         Aabb::new(Vector3::from_array(self.min), Vector3::from_array(self.max))
     }
 
@@ -113,7 +121,7 @@ impl GrowableBox {
         });
     }
 
-    fn grow_to_contain(&mut self, other: &Self) {
+    pub(crate) fn grow_to_contain(&mut self, other: &Self) {
         for (min, &other) in self.min.iter_mut().zip(&other.min) {
             *min = sse_min(*min, other);
         }
@@ -134,9 +142,9 @@ impl GrowableBox {
 
 /// One coordinate of a leaf's centroid (upstream `CentroidCoordinate`).
 #[derive(Debug, Clone, Copy)]
-struct Centroid {
-    coordinate: f32,
-    leaf: u32,
+pub(crate) struct Centroid {
+    pub(crate) coordinate: f32,
+    pub(crate) leaf: u32,
 }
 
 /// Leaves `[start, end]` (inclusive) of the node at `output`, whose children go to `left_child` and

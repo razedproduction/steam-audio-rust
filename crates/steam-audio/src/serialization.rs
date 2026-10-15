@@ -177,6 +177,26 @@ impl Builder {
         self.end_vector(offsets.len())
     }
 
+    /// A vector of offsets to tables where `None` is upstream's null offset. Upstream's release builds write a null
+    /// offset as `ReferTo(0)` (its debug builds assert), which points at the end of the buffer; so does this.
+    pub(crate) fn create_vector_of_optional_offsets(
+        &mut self,
+        offsets: &[Option<Offset>],
+    ) -> Offset {
+        self.start_vector(offsets.len(), 4);
+        for &offset in offsets.iter().rev() {
+            let relative = match offset {
+                Some(offset) => self.refer_to(offset),
+                None => {
+                    self.align(4);
+                    self.size() + 4
+                }
+            };
+            self.push_u32(relative);
+        }
+        self.end_vector(offsets.len())
+    }
+
     /// Upstream `StartTable`.
     pub(crate) fn start_table(&mut self) -> u32 {
         assert!(
@@ -198,6 +218,24 @@ impl Builder {
             let offset = self.push_u32(value as u32);
             self.track_field(slot, offset);
         }
+    }
+
+    /// Adds an 8-bit integer field unless it equals its default (upstream `AddElement<int8_t>`).
+    pub(crate) fn add_i8(&mut self, slot: u16, value: i8, default: i8) {
+        if value != default {
+            self.align(1);
+            self.push_bytes(&value.to_le_bytes());
+            let offset = self.size();
+            self.track_field(slot, offset);
+        }
+    }
+
+    /// Adds a struct field stored inline, aligned to 4 (upstream `AddStruct`).
+    pub(crate) fn add_struct(&mut self, slot: u16, bytes: &[u8]) {
+        self.align(4);
+        self.push_bytes(bytes);
+        let offset = self.size();
+        self.track_field(slot, offset);
     }
 
     /// Adds a field referring to a finished object; `None` leaves it out (upstream `AddOffset`).
@@ -346,6 +384,24 @@ impl<'a> Table<'a> {
         }
     }
 
+    pub(crate) fn i8(&self, slot: u16, default: i8) -> Result<i8> {
+        match self.field(slot)? {
+            Some(pos) => read(self.buf, pos).map(i8::from_le_bytes),
+            None => Ok(default),
+        }
+    }
+
+    /// The bytes of a struct field of `size` bytes, if present.
+    pub(crate) fn struct_bytes(&self, slot: u16, size: usize) -> Result<Option<&'a [u8]>> {
+        let Some(pos) = self.field(slot)? else {
+            return Ok(None);
+        };
+        pos.checked_add(size)
+            .and_then(|end| self.buf.get(pos..end))
+            .map(Some)
+            .ok_or_else(|| malformed("struct out of bounds"))
+    }
+
     pub(crate) fn table(&self, slot: u16) -> Result<Option<Table<'a>>> {
         self.field(slot)?
             .map(|pos| Table::at(self.buf, follow(self.buf, pos)?))
@@ -420,6 +476,18 @@ impl<'a> Vector<'a> {
     pub(crate) fn table(&self, i: usize) -> Result<Table<'a>> {
         assert!(i < self.len, "vector index out of range");
         Table::at(self.buf, follow(self.buf, self.data + i * 4)?)
+    }
+
+    /// Element `i` of a vector of tables that may hold null offsets (see
+    /// [`Builder::create_vector_of_optional_offsets`]): `None` for one pointing at the end of the buffer. Panics if `i`
+    /// is out of range.
+    pub(crate) fn optional_table(&self, i: usize) -> Result<Option<Table<'a>>> {
+        assert!(i < self.len, "vector index out of range");
+        let pos = follow(self.buf, self.data + i * 4)?;
+        if pos == self.buf.len() {
+            return Ok(None);
+        }
+        Table::at(self.buf, pos).map(Some)
     }
 }
 
