@@ -166,29 +166,31 @@ impl EqEffect {
     }
 
     fn set_filter_gains(&mut self, index: usize, gains: [f32; NUM_BANDS]) {
-        let rate = self.sampling_rate;
-        self.filters[0][index].set_filter(Iir::low_shelf(
-            HIGH_CUTOFF_FREQUENCIES[0],
-            gains[0],
-            rate,
-        ));
+        let filters = eq_filters(&gains, self.sampling_rate);
+        for (band, filter) in self.filters.iter_mut().zip(filters) {
+            band[index].set_filter(filter);
+        }
+    }
+}
 
-        for i in 1..NUM_BANDS - 1 {
-            self.filters[i][index].set_filter(Iir::peaking(
+/// The filters that apply `gains` per band: a low shelf below the first band's upper cutoff, a peaking filter for
+/// each middle band, and a high shelf above the last band's lower cutoff. `ReverbEffect` designs its filters the same
+/// way.
+pub(crate) fn eq_filters(gains: &[f32; NUM_BANDS], sampling_rate: u32) -> [Iir; NUM_BANDS] {
+    std::array::from_fn(|i| {
+        if i == 0 {
+            Iir::low_shelf(HIGH_CUTOFF_FREQUENCIES[i], gains[i], sampling_rate)
+        } else if i == NUM_BANDS - 1 {
+            Iir::high_shelf(LOW_CUTOFF_FREQUENCIES[i], gains[i], sampling_rate)
+        } else {
+            Iir::peaking(
                 LOW_CUTOFF_FREQUENCIES[i],
                 HIGH_CUTOFF_FREQUENCIES[i],
                 gains[i],
-                rate,
-            ));
+                sampling_rate,
+            )
         }
-
-        let last = NUM_BANDS - 1;
-        self.filters[last][index].set_filter(Iir::high_shelf(
-            LOW_CUTOFF_FREQUENCIES[last],
-            gains[last],
-            rate,
-        ));
-    }
+    })
 }
 
 fn apply_filter_cascade(

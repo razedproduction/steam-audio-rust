@@ -98,7 +98,7 @@ Order: leaves first. A box is ticked only when the slice passes its parity tests
 | 5 | Scene and geometry: mesh, static/instanced mesh, BVH, scene, materials, OBJ loading for tests | `mesh`, `static_mesh`, `instanced_mesh`, `bvh`, `scene`, `custom_scene`, `material`, `hit`, `triangle` | ☑ | ☑ | ☑ | BVH nodes, triangle and material indices, any-hit, occlusion and box results, versions, `dumpObj` bytes: `EXACT`; normals, hit distances and materials: `F32`. Bit-exact on Windows (debug and release) for the six meshes in `core/data/meshes` (Sponza: 262 267 triangles, its 524 533 nodes checked by hash; about 20 s in a debug build) and a scene with a static mesh and three instances traced through seven stages of changes. The builder sorts with a port of MSVC's `std::sort`, so equal centroids end up in upstream's order and the trees are identical (R21). Meshes are loaded with a port of `RayTracerCompare.test.cpp`'s OBJ loader. Serialization moves to stage 6; `CustomScene` is the `RayTracer` trait. Upstream quirks kept: R20 |
 | 5.1 | Direct simulator (occlusion, transmission) | `direct_simulator` | ☑ | ☑ | ☑ | `F32` for every field of the direct path. Bit-exact on Windows (debug and release) for two scenes (`boxroom` and `simplescene` with `Lcg` materials, each with an instanced `smallbox`): 256 source/listener pairs per scene (200 random, 56 on opposite sides of the box), each simulated with raycast occlusion and 1–16 transmission rays, volumetric occlusion from 64- and 256-point simulators (asking for 1–256 points, so the request is clamped), a 1-point simulator (which keeps no points) and all 64 flag combinations, every 7th without a scene. The paths cross 0–9 surfaces. No randomness is involved (R2 does not apply): the volumetric points are the deterministic Halton samples of 2.2. Off Windows those points come from libm (`acos`, `cbrt`, `sin`, `cos`), so a ray grazing an edge could flip a sample; none does in these cases. `DirectSoundPath` moved from `effects::direct` to `simulation` (still re-exported). The OBJ loader and the scene's `Lcg` draws are shared with stage 5 (`tools/golden/src/scene_inputs.h`, `tests/common`). Upstream quirks kept: R22 |
 | 6.1 | Energy field, impulse response, reconstructor | `energy_field`, `impulse_response`, `reconstructor` | ☑ | ☑ | ☑ | Sizes and energy field and IR operations (add, scale, scale-accumulate, copy between objects of different sizes): `EXACT`/`F32`; reconstructed IRs: `peak_relative(1e-5)`. Bit-exact on Windows (debug and release) at 48, 44.1 and 22.05 kHz: Gaussian and linear reconstruction of 10 IRs per rate in 6 calls on one reconstructor, with silent and below-threshold bins, fields with fewer or more channels and bins than the IR, durations and orders below the IR's, both air absorption models and correction curves; the IRs are prefilled with noise, so untouched samples are checked to be zeroed. Off Windows `expf` may differ by an ulp. The white noise ports MSVC's `std::mt19937` and `uniform_real_distribution<float>` (R2). The overlap-save partitioner now takes an `ImpulseResponse`. Serialization moves to 6.4. Upstream quirks kept: R23 |
-| 6.2 | Reverb: reverb effect, reverb estimator, hybrid reverb estimator and effect | `reverb_effect`, `float8_reverb_effect`, `reverb_estimator`, `hybrid_reverb_*` | ☐ | ☐ | ☐ | R2 (`rand()`), R8 |
+| 6.2 | Reverb: reverb effect, reverb estimator, hybrid reverb estimator and effect; delay effect (used by the hybrid effect) | `reverb_effect`, `float8_reverb_effect`, `reverb_estimator`, `hybrid_reverb_*`, `delay_effect` | ☑ | ☑ | ☑ | Reverb effect audio, hybrid-estimated IRs and hybrid effect audio: `peak_relative(1e-5)`; reverb times and EQ coefficients: `F32`; scaled energy fields: relative `1e-5` with no absolute part (tighter than `F32`: the energies are below 0.02); states, tail counts and delays `EXACT`. Bit-exact on Windows (debug and release): the reverb effect at 48, 24 and 22.05 kHz (frames of 256, 128 and 64; apply, tailApply, tails past their end, reset) against upstream's AVX path (R8); reverb times of 6 energy fields (decaying from various bins, silent, 3 bins long) under 3 air absorption models; reverb scaling; 6 hybrid estimations at 24 and 48 kHz (EQ from an energy field and from the IR, a clamped transition time, an order below the IR's, consecutive calls sharing filter state). The hybrid effect (mono, R12; IR updates, no IR, a delay past the delay line, tails, reset) is within 2.4e-7 × peak (debug and release), not bit-exact because of its convolution's FFT (R1). Delay lengths come from MSVC's `rand()`, ported as `random::CRand` and passed to constructors (R2). Off Windows `expf`, `logf`, `log10f` and `powf` may differ by an ulp. `I3DL2Reverb` estimation not ported (unused). Upstream quirks kept: R24 |
 | 6.3 | Reflection simulator, `RandomNumberGenerator`, job graph, thread pool, triple buffer | `reflection_simulator*`, `job*`, `thread_pool`, `triple_buffer` | ☐ | ☐ | ☐ | R2 (statistical) |
 | 6.4 | Probes, baked data, baking, `SimulationManager`, serialisation (energy fields, and mesh, static mesh and scene serialization, moved from 5) | `probe_*`, `baked_*`, `reflection_baker`, `simulation_*`, `serialized_object` | ☐ | ☐ | ☐ | R4 |
 | 7 | Pathing | `probe_tree`, `path_*` | ☐ | ☐ | ☐ | R2 |
@@ -267,6 +267,16 @@ Order: leaves first. A box is ticked only when the slice passes its parity tests
 | `Reconstructor(maxDuration, maxOrder, samplingRate)` | `simulation::Reconstructor::new(max_duration, sampling_rate)` |
 | `reconstruct(numIRs, energyFields, distanceAttenuationCorrectionCurves, airAbsorptionModels, impulseResponses, type, duration, order)` | `reconstruct(&field, &mut ir, &ReconstructionParams { kind, duration, order, air_absorption, distance_attenuation_correction })`, once per IR |
 | `std::default_random_engine` + `std::uniform_real_distribution<float>` (MSVC) | crate-private `random::Mt19937` (`default()`, `next_u32`, `uniform_f32(min, max)`) |
+| `rand()`, `srand(seed)` (MSVC, per-thread state) | `random::CRand`: `rand()`, `CRand::new(seed)`; `CRand::default()` is a fresh thread (seed 1) |
+| `Reverb` (`reverbTimes`) | `simulation::Reverb` (`reverb_times`) |
+| `ReverbEstimator::estimate(field, airAbsorption, reverb)`, `applyReverbScale(reverbScale, field)` | `simulation::reverb_estimator::estimate(&field, &air_absorption) -> Reverb`, `apply_reverb_scale(&reverb_scale, &mut field)` |
+| `ReverbEffect(audioSettings)`, `apply({reverb}, in, out)`, `tailApply`, `tail`, `numTailSamplesRemaining` | `effects::ReverbEffect::new(&audio_settings, &mut rand)`, `apply(&reverb, &in, &mut out)`, `tail_apply`, `tail`, `num_tail_samples_remaining`; also `delay_lengths()` |
+| `ReverbEffect::sMinAbsorptiveGain` | `effects::reverb::MIN_ABSORPTIVE_GAIN` |
+| `DelayEffect(audioSettings, {maxDelayInSamples})`, `apply({delayInSamples}, in, out)`, `tail(out)` | `effects::DelayEffect::new(&audio_settings, max_delay_in_samples)`, `apply(delay, &in, &mut out)`, `tail(&mut out)` |
+| `HybridReverbEstimator(maxDuration, samplingRate, frameSize)` | `simulation::HybridReverbEstimator::new(max_duration, sampling_rate, frame_size, &mut rand)` |
+| `HybridReverbEstimator::estimate(field, reverb, ir, transitionTime, overlapFraction, order, eqCoeffs, delay)` | `estimate(Option<&EnergyField>, &reverb, &mut ir, transition_time, overlap_fraction, order) -> HybridReverbEstimate { eq_coeffs, delay }` |
+| `HybridReverbEffect(audioSettings, {numChannels, irSize})` | `effects::HybridReverbEffect::new(&audio_settings, &OverlapSaveConvolutionSettings { .. }, &mut rand)` |
+| `HybridReverbEffect::apply({fftIR, fftIRUpdated, reverb, eqCoeffs, delay, numChannels}, in, out)`, `tail` | `apply(HybridReverbParams { ir, num_channels, reverb, eq_coeffs, delay }, &in, &mut out)` with `ir`: `HybridReverbIr::None` (null `fftIR`), `Current`, `Updated(&mut fir)`; `tail` |
 
 ## 6. Deviations
 
@@ -285,8 +295,12 @@ Tracked in [`DEVIATIONS.md`](DEVIATIONS.md).
     compare against goldens. Done in 6.1 (`random::Mt19937`, bit-exact): the reference toolset's `<random>` (MSVC
     14.44) makes each `float` from one draw, its top 24 bits times 2^-24, then `u * (max - min) + min`. That is
     `generate_canonical` as rewritten in recent MSVC versions; goldens from another standard library would differ.
-  - `ReverbEffect` delay lengths: `rand() % 101`, MSVC's process-global LCG. Port the LCG; the global call order
-    has to be modelled in tests.
+  - `ReverbEffect` delay lengths: `rand() % 101`, MSVC's LCG (`state × 214013 + 2531011`, bits 16–30), whose state
+    the UCRT keeps per thread, starting at 1. Done in 6.2 (`random::CRand`, bit-exact): the port has no global, so
+    every constructor that builds a `ReverbEffect` (`ReverbEffect`, `HybridReverbEstimator`, `HybridReverbEffect`)
+    takes a `&mut CRand`; objects built in turn from one `CRand` get the delays upstream's get when built in turn on
+    one thread. The generator calls `srand(seed)` before each object and the tests pass `CRand::new(seed)`. The C API
+    (stage 8) can keep one `CRand` per thread to reproduce upstream exactly.
   - Reflection and pathing ray directions: `RandomNumberGenerator` is seeded with `time(NULL)`, so **upstream
     itself is not reproducible**. Use statistical checks (band energies within ±0.5 dB, reverb times within 5 %)
     and seeded determinism on the Rust side.
@@ -318,7 +332,8 @@ Tracked in [`DEVIATIONS.md`](DEVIATIONS.md).
   on `Context`'s SIMD level (AVX → 8), and the two recurrences round differently (measured ≤ 3.0e-6 × peak).
   `ReverbEffect` dispatches the same way. The port always uses the 8-sample recurrence, the one upstream runs on any
   x64 CPU with AVX, and is bit-exact against it; goldens for both are generated by setting `Context::sSIMDLevel` in
-  the generator (which therefore needs an AVX CPU). Stage 6 (`ReverbEffect`) follows the same choice.
+  the generator (which therefore needs an AVX CPU). Stage 6.2 (`ReverbEffect`, whose network and allpasses step
+  8 samples at a time on AVX and 4 otherwise) follows the same choice and is bit-exact against the AVX path.
 - **R9. Upstream quirks the port keeps (found in 2.7).** `Allpass::reset()` zeroes the gain as well as the delay
   line, and `ReverbEffect`'s constructor calls it, so its allpasses are plain delays. `IIR2Filterer`'s buffer path
   stores the last raw input (without the `1e-9` the recurrence adds) as state, which the single-sample path then
@@ -458,3 +473,28 @@ Tracked in [`DEVIATIONS.md`](DEVIATIONS.md).
   the truncated π), and air absorption is evaluated at half the distance sound travels to the bin's centre. Gaussian
   reconstruction asserts a finite normalization only in debug builds; the port, like release builds, does not check.
   Reconstructing more samples than the maximum duration overruns upstream's buffers (the port panics).
+- **R24. Reverb quirks the port keeps (found in 6.2).** `ReverbEffect` picks its 16 delay lengths once, for a 10 s
+  reverb time (powers of the first 16 primes near `0.15 × 10 s / 16` plus `rand() % 101` samples); a delay line of
+  `d` samples read and written in frames delays by `d + frame size`. Its allpasses have zero gain (R9), so they are
+  plain delays of 225, 341, 441 and 556 samples. It keeps a second set of filters for crossfading but never switches
+  to it, so the absorption and tone correction filters change abruptly every frame; `reset` keeps their state. The
+  input is added unscaled to all 16 lines; the output is their mean. Reverb times are clamped to at least 0.1 s for
+  the filters but not for the tail, which lasts `2 × ceil(max time × rate / frame size)` frames (an infinite time gives
+  `2 × INT_MIN`, which wraps to 0); its counter goes negative after the tail. A `tail` before any `apply` filters with
+  zero coefficients and outputs silence. The filters are designed for 800 Hz and 8 kHz edges: below 16 kHz the high
+  shelf lies above Nyquist and the network can diverge (11.025 kHz reached 1e36 within 70 frames in a first draft of
+  the generator). `ReverbEstimator`'s backward pass starts at the time its forward pass ended (`numBins × 0.01` s,
+  accumulated in `float`), and the reverb time is `−6 × (denominator / numerator)` of the line fit, 0 when the
+  numerator's magnitude is at most `FLT_MIN`; `estimate` raises it to 0.1 s (NaN passes). `applyReverbScale` scales
+  every channel by the factors of channel 0, from its first peak bin on, skipping bins that are not positive, then
+  restores channel 0's total energy. `HybridReverbEstimator` takes the parametric level from the energy field as
+  `sqrt(4π E)` (truncated π) at the bin where the crossfade starts, or from the IR's channel 0 band by band (relative
+  energy after that sample, divided by the white-noise norms, square-rooted); it clamps a transition past the IR's
+  end to its last sample, fades the first `(order + 1)²` channels by `sqrt(α)` and *subtracts*
+  `(1 − sqrt(1 − α)) ×` the parametric IR from channel 0, then zeroes those channels after the transition. Its EQ and
+  reverb effects are reset for every estimate, but their filter states (which `reset` keeps) carry over, so an estimate
+  depends on the earlier ones; its `GainEffect` is never used. `HybridReverbEffect` adds the parametric part, scaled by
+  the order-0 spherical harmonic, to channel 0 only; its tail runs the parametric chain from the first part that still
+  has a tail. `DelayEffect` never clears its first-frame flag, so a delay change takes effect at once, without the
+  interpolation it sets up; a delay of at least the maximum outputs silence and leaves the effect unchanged (the
+  input frame is lost); its tail does not advance the write position.
