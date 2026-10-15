@@ -24,6 +24,7 @@ add_executable(golden
     ${GOLDEN_DIR}/src/reconstructor.cpp
     ${GOLDEN_DIR}/src/reverb.cpp
     ${GOLDEN_DIR}/src/reflection_simulator.cpp
+    ${GOLDEN_DIR}/src/serialization.cpp
 )
 
 target_link_libraries(golden PRIVATE core hrtf)

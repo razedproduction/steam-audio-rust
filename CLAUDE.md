@@ -12,7 +12,7 @@ A Rust reimplementation of Valve's Steam Audio, verified numerically against the
 - `testdata/golden/<module>/<case>.npy`: committed reference outputs.
 - `docs/PORTING_PLAN.md`: **source of truth**: stage order, status table, tolerances, upstream→Rust name map,
   risks (R1–R6). Read the relevant rows before starting a stage and update them when it lands.
-- `docs/DEVIATIONS.md`: every intentional behaviour difference. `docs/adr/`: decisions (0001: SOFA loader).
+- `docs/DEVIATIONS.md`: every intentional behaviour difference. `docs/adr/`: decisions (0001: SOFA loader, 0002: FlatBuffers).
 
 ## Checks (must pass before every commit)
 

@@ -38,7 +38,7 @@ This document is the source of truth for the port. Update the status table in §
 | PFFFT / FFTS / IPP / vDSP | FFT | `realfft` + `rustfft` |
 | libmysofa (+ zlib) | SOFA HRTF loading | own crate `sofa` (ADR 0001) + `miniz_oxide` |
 | Embree, Radeon Rays, ISPC | Ray tracing | own BVH tracer (the upstream "Default" scene type is the reference) |
-| FlatBuffers | Serialisation (scenes, baked data) | `flatbuffers` crate with the same `.fbs` schemas → binary-compatible files |
+| FlatBuffers | Serialisation (scenes, baked data) | own safe writer and reader for the same `.fbs` schemas (ADR 0002) → byte-identical files |
 | OpenCL, TrueAudioNext | GPU convolution and IR processing | **out of scope** |
 | IPP, MKL | Vector math and FFT acceleration | **out of scope** (scalar + `std` SIMD) |
 | dr_wav, PortAudio, GLFW, ImGui | Samples and tools | `hound` in tests only |
@@ -100,7 +100,9 @@ Order: leaves first. A box is ticked only when the slice passes its parity tests
 | 6.1 | Energy field, impulse response, reconstructor | `energy_field`, `impulse_response`, `reconstructor` | ☑ | ☑ | ☑ | Sizes and energy field and IR operations (add, scale, scale-accumulate, copy between objects of different sizes): `EXACT`/`F32`; reconstructed IRs: `peak_relative(1e-5)`. Bit-exact on Windows (debug and release) at 48, 44.1 and 22.05 kHz: Gaussian and linear reconstruction of 10 IRs per rate in 6 calls on one reconstructor, with silent and below-threshold bins, fields with fewer or more channels and bins than the IR, durations and orders below the IR's, both air absorption models and correction curves; the IRs are prefilled with noise, so untouched samples are checked to be zeroed. Off Windows `expf` may differ by an ulp. The white noise ports MSVC's `std::mt19937` and `uniform_real_distribution<float>` (R2). The overlap-save partitioner now takes an `ImpulseResponse`. Serialization moves to 6.4. Upstream quirks kept: R23 |
 | 6.2 | Reverb: reverb effect, reverb estimator, hybrid reverb estimator and effect; delay effect (used by the hybrid effect) | `reverb_effect`, `float8_reverb_effect`, `reverb_estimator`, `hybrid_reverb_*`, `delay_effect` | ☑ | ☑ | ☑ | Reverb effect audio, hybrid-estimated IRs and hybrid effect audio: `peak_relative(1e-5)`; reverb times and EQ coefficients: `F32`; scaled energy fields: relative `1e-5` with no absolute part (tighter than `F32`: the energies are below 0.02); states, tail counts and delays `EXACT`. Bit-exact on Windows (debug and release): the reverb effect at 48, 24 and 22.05 kHz (frames of 256, 128 and 64; apply, tailApply, tails past their end, reset) against upstream's AVX path (R8); reverb times of 6 energy fields (decaying from various bins, silent, 3 bins long) under 3 air absorption models; reverb scaling; 6 hybrid estimations at 24 and 48 kHz (EQ from an energy field and from the IR, a clamped transition time, an order below the IR's, consecutive calls sharing filter state). The hybrid effect (mono, R12; IR updates, no IR, a delay past the delay line, tails, reset) is within 2.4e-7 × peak (debug and release), not bit-exact because of its convolution's FFT (R1). Delay lengths come from MSVC's `rand()`, ported as `random::CRand` and passed to constructors (R2). Off Windows `expf`, `logf`, `log10f` and `powf` may differ by an ulp. `I3DL2Reverb` estimation not ported (unused). Upstream quirks kept: R24 |
 | 6.3 | Reflection simulator, `RandomNumberGenerator`, job graph, thread pool, triple buffer | `reflection_simulator*`, `job*`, `thread_pool`, `triple_buffer` | ☑ | ☑ | ☑ | Energy fields: `peak_relative(1e-5)`. Bit-exact on Windows (debug and release) on one thread, with the generators reseeded (R2): `ReflectionSimulator` and `BatchedReflectionSimulator` (batches of 1, 37 and 1024 rays) on two scenes (`boxroom`, `simplescene` with `Lcg` materials and an instanced `smallbox`), four sources (one ignored above the maximum, one inside the listener's sphere, one omnidirectional), three runs in a row on one simulator (output fields of lower and higher order and duration than the simulator's; 1000 rays and 8 bounces; 517 rays stopped after 0.03 s; 333 rays, 1 bounce), a simulator of order 0 and 0.25 s with 5 diffuse samples (16 bounces), and a purely specular scene. On 4 threads the specular scene matches the same golden up to summation order (2.6e-10 absolute, far below the tolerance); with scattering, rays draw other random numbers, so 4 threads are checked statistically against 1: energy per band within 0.5 dB at 32768 rays (measured ≤ 0.2 dB). Off Windows libm's `powf` (specular lobe) and the samples' `sin`/`cos` may differ by an ulp, which could send a ray another way at a grazing hit or move a deposit across a bin boundary; none does in these cases. `RandomNumberGenerator` is `random::Mt19937` (its `uniformRandom` is the draw shifted right by one). Image and ray-leakage simulations not ported (debug and test helpers). Upstream quirks kept: R25 |
-| 6.4 | Probes, baked data, baking, `SimulationManager`, serialisation (energy fields, and mesh, static mesh and scene serialization, moved from 5) | `probe_*`, `baked_*`, `reflection_baker`, `simulation_*`, `serialized_object` | ☐ | ☐ | ☐ | R4 |
+| 6.4a | Serialization: FlatBuffers writer and reader (ADR 0002); energy field, mesh, static mesh and scene serialization (moved from 5 and 6.1) | `serialized_object`, `*.fbs`, the `serialize` functions and deserializing constructors of `energy_field`, `mesh`, `static_mesh`, `scene` | ☑ | ☑ | ☑ | `EXACT`: whole buffers, byte for byte. Bit-exact on every platform (no floating-point arithmetic is involved): energy fields of 1–16 channels and 1–30 bins (one with NaN, infinities and −0, one of 0 bins whose `num_bins` is left out as a default), `serializedSize`, static meshes of `smallbox`, `boxroom`, `simplescene` (`Lcg` materials), `sphere` and `teapot` (15 704 triangles, 346 KB), and a scene with a mesh added twice, an instanced mesh and an uncommitted mesh (neither written). Every golden buffer deserializes into objects equal to the serialized ones (BVHs included) and serializes back to the same bytes, which covers cross-loading (R4). Truncated buffers (every length) and 512 `Lcg` corruptions of the scene (20 000 checked once locally) give errors or valid scenes, never panics. Upstream quirks kept: R26 |
+| 6.4b | Probes, probe batches, baked reflection data, baked reflection simulator, with their serialization | `probe*` (except `probe_tree`), `baked_reflection_*` | ☐ | ☐ | ☐ | R4 |
+| 6.4c | Reflection baker, `SimulationManager`, simulation data | `reflection_baker`, `simulation_*` | ☐ | ☐ | ☐ | — |
 | 7 | Pathing | `probe_tree`, `path_*` | ☐ | ☐ | ☐ | R2 |
 | 8 | C API (`phonon-capi`) | `api_*`, `phonon.h` | ☐ | ☐ | ☐ | upstream `itest` builds unchanged. Audio buffer bridging and precondition checks: R7 |
 | 9a | Bevy integration (`bevy_steam_audio`); an MVP is possible after stage 4 | — | ☐ | ☐ | — | — |
@@ -286,6 +288,10 @@ Order: leaves first. A box is ticked only when the slice passes its parity tests
 | `BatchedReflectionSimulator(…, rayBatchSize)` | `simulation::BatchedReflectionSimulator::new(&settings, ray_batch_size, seed)` |
 | `simulate(scene, numSources, sources, 1, listeners, directivities, numRays, numBounces, duration, order, irradianceMinDistance, energyFields, jobGraph)` + `threadPool.process(jobGraph)` | `simulate(&scene, &ReflectionSimulationParams { sources, directivities, listener, .. }, &mut energy_fields, &pool)` |
 | `ReflectionSimulatorFactory::create(SceneType::Default / Custom, …)` | `ReflectionSimulator` / `BatchedReflectionSimulator` |
+| `SerializedObject`, `serializeAsRoot(obj)` (scene, static mesh), `fbb.Finish(field.serialize(obj))` | `Vec<u8>` / `&[u8]`: `Scene::serialize()`, `StaticMesh::serialize()`, `EnergyField::serialize()` |
+| `Scene(SerializedObject&)`, `StaticMesh(SerializedObject&)`, `IScene::createStaticMesh(SerializedObject&)`, `EnergyField(const Serialized::EnergyField*)` | `Scene::deserialize(&bytes)`, `StaticMesh::deserialize(&bytes)` (+ `insert_static_mesh`), `EnergyField::deserialize(&bytes)` → `Result` (`Error::MalformedSerializedData`) |
+| `EnergyField::serializedSize` | `EnergyField::serialized_size` |
+| `flatbuffers::FlatBufferBuilder`, `GetRoot`, generated `Create*` and accessors | crate-private `serialization::Builder`, `Table`, `Vector`; each type's `serialize_into` / `from_table` |
 
 ## 6. Deviations
 
@@ -324,7 +330,9 @@ Tracked in [`DEVIATIONS.md`](DEVIATIONS.md).
   the port truncates seek offsets to `i32` like the reference build; on Linux and macOS upstream would differ only on
   corrupt files with offsets of 2 GiB or more.
 - **R4. FlatBuffers compatibility** of baked data. It must be readable by both implementations, which is
-  verified by cross-loading files.
+  verified by cross-loading files. Settled for scenes, static meshes and energy fields in 6.4a (ADR 0002): the port's
+  builder reproduces upstream's `FlatBufferBuilder` 1.12 and writes byte-identical buffers, so each side reads the
+  other's files; probe batches follow in 6.4b.
 - **R6. Shipped binaries use Intel IPP** for `ArrayMath` and FFT on x86/x64. Our reference build uses upstream's
   generic path (IPP is not redistributable), so parity is against the generic path. IPP results may differ in the
   last bits.
@@ -528,3 +536,12 @@ Tracked in [`DEVIATIONS.md`](DEVIATIONS.md).
   π). If the pool is cancelled before every job has run, the outputs stay zero. The batched simulator draws its random
   numbers bounce by bounce across the batch, traces rays that have ended again at every bounce (they stay ended), and
   marks them occluded through shadow rays of negative length.
+- **R26. Serialization quirks the port keeps (found in 6.4a).** The schema declares a triangle's indices as `float`,
+  but upstream copies its `int` indices into them bit for bit, so files hold integers (small indices read as floats are
+  denormals). Mesh vertices are written with `CreateUninitializedVectorOfStructs`, which pre-aligns to the struct's
+  *size* (12) under a power-of-two mask and raises the buffer's minimum alignment to 12, so the root offset is padded
+  with that mask too; the other struct vectors use `CreateVectorOfStructs` (alignment 4). Fields equal to their default
+  are left out (an energy field of 0 bins has no `num_bins`). Static meshes write only the 3-band `materials`, never
+  `materials2`, and not the material pending for the next commit. A scene writes its committed static meshes in order
+  (a mesh added twice is written twice), not its instanced meshes or uncommitted changes; a deserialized scene has all
+  its meshes committed, at version 0. Deserializing ignores material indices and energies past the counts it needs.
