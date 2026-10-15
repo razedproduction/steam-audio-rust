@@ -95,6 +95,21 @@ impl EnergyField {
         }
     }
 
+    /// `self += other` over the channels and bins both have: upstream's `add(self, other, self)`.
+    pub(crate) fn add_assign(&mut self, other: &Self) {
+        let (num_channels, n) = common_size(self, other);
+        for i in 0..num_channels {
+            for j in 0..NUM_BANDS {
+                for (out, x) in self.band_mut(i, j)[..n]
+                    .iter_mut()
+                    .zip(&other.band(i, j)[..n])
+                {
+                    *out += x;
+                }
+            }
+        }
+    }
+
     /// `out = input * scalar` over the channels and bins both have; the rest of `out` is left as it is.
     pub fn scale(input: &Self, scalar: f32, out: &mut Self) {
         let (num_channels, n) = common_size(input, out);

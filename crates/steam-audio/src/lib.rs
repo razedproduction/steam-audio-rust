@@ -17,6 +17,7 @@ pub mod fft;
 pub mod geometry;
 pub mod hrtf;
 pub mod iir;
+pub mod job_graph;
 pub mod math;
 pub mod propagation_medium;
 pub mod random;
@@ -25,6 +26,8 @@ pub mod scene;
 pub mod sh;
 pub mod simulation;
 pub mod speaker_layout;
+pub mod thread_pool;
+pub mod triple_buffer;
 pub mod window;
 
 #[cfg(feature = "sofa")]
