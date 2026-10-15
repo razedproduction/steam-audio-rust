@@ -49,6 +49,12 @@ impl ThreadPool {
         let jobs_completed = AtomicUsize::new(0);
         let (sender, receiver) = mpsc::channel::<()>();
 
+        let report = |progress: &mut dyn FnMut(f32)| {
+            progress(jobs_completed.load(Ordering::SeqCst) as f32 / num_jobs as f32);
+        };
+        // Before any thread starts, so the first report is always 0.
+        report(&mut progress);
+
         thread::scope(|scope| {
             for thread_id in 0..self.num_threads {
                 let sender = sender.clone();
@@ -73,10 +79,6 @@ impl ThreadPool {
             }
             drop(sender);
 
-            let report = |progress: &mut dyn FnMut(f32)| {
-                progress(jobs_completed.load(Ordering::SeqCst) as f32 / num_jobs as f32);
-            };
-            report(&mut progress);
             for () in receiver {
                 report(&mut progress);
             }
