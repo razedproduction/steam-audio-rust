@@ -33,16 +33,16 @@ This project is an experiment in reimplementing that functionality in **Rust**, 
 
 ## Status
 
-> 🚧 **Reflections stage (started).** The math and signal-processing foundations, binaural rendering (HRTF, SOFA files, convolution, panning, binaural and Ambisonics effects), the direct sound models, effects and simulator (occlusion and transmission), the scene and its BVH ray tracer, and the energy field, impulse response and reconstructor are ported and verified against the C++ reference. Reverb, the reflection simulator, baking, pathing and the C API do not exist yet, so nothing here is usable in production.
+> 🚧 **Reflections stage (started).** The math and signal-processing foundations, binaural rendering (HRTF, SOFA files, convolution, panning, binaural and Ambisonics effects), the direct sound models, effects and simulator (occlusion and transmission), the scene and its BVH ray tracer, the energy field, impulse response and reconstructor, and parametric and hybrid reverb are ported and verified against the C++ reference. The reflection simulator, baking, pathing and the C API do not exist yet, so nothing here is usable in production.
 
 Current stage (checked against golden data produced by the original C++; earlier stages are tracked in [`docs/PORTING_PLAN.md`](docs/PORTING_PLAN.md)):
 
 | Stage | Module | Parity |
 | --- | --- | --- |
-| 5.1 | Direct simulator: occlusion (raycast and volumetric) and transmission | Every field of the direct path bit-exact on Windows for two scenes with instances: 256 source/listener pairs each, 1–16 transmission rays, 64- and 256-point volumetric occlusion and all 64 flag combinations |
 | 6.1 | Energy field, impulse response, reconstructor | Field and IR operations exact; reconstructed IRs (Gaussian and linear, 48, 44.1 and 22.05 kHz, both air absorption models) bit-exact on Windows, within `1e-5` × peak elsewhere |
+| 6.2 | Reverb: parametric reverb effect, reverb estimator, hybrid reverb estimator and effect, delay effect | Reverb effect (48, 24 and 22.05 kHz), reverb times, reverb scaling and hybrid estimation bit-exact on Windows (debug and release); hybrid effect within `1e-5` × peak (measured 2.4e-7, FFT) |
 
-**Next:** stage 6.2, reverb (reverb effect, reverb estimator, hybrid reverb).
+**Next:** stage 6.3, the reflection simulator (with the job graph, thread pool and triple buffer).
 
 The detailed plan, module order, per-module tolerances and known risks live in [`docs/PORTING_PLAN.md`](docs/PORTING_PLAN.md); intentional behaviour differences from upstream are listed in [`docs/DEVIATIONS.md`](docs/DEVIATIONS.md). Treat the roadmap below as intent, not a promise.
 
@@ -69,7 +69,7 @@ Planned scope, mirroring the feature areas of the original library. Boxes are ch
 - [x] **Binaural rendering**: HRTF loading and interpolation, convolution, panning, ambisonics effects, SOFA files
 - [x] **Direct sound**: distance attenuation, air absorption, directivity, gain and EQ, occlusion and transmission
 - [x] **Scene and geometry**: static and instanced meshes, ray tracing backend *(serialization comes with baking)*
-- [ ] **Reflections**: real-time and baked sound propagation *(energy fields, impulse responses and the reconstructor done; reverb, the reflection simulator and baking to go)*
+- [ ] **Reflections**: real-time and baked sound propagation *(energy fields, impulse responses, the reconstructor and reverb done; the reflection simulator and baking to go)*
 - [ ] **Pathing**: diffraction and occlusion-aware paths between source and listener
 - [ ] **C API compatibility layer**: drop-in replacement for the original `phonon` interface
 - [ ] **pragma.core integration**: a `pragma.component-audio` component for [pragma.core](https://github.com/razedproduction/pragma.core), a separate `pragma_component_audio` crate on top of the engine-agnostic core

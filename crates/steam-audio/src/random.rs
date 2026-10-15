@@ -1,6 +1,40 @@
-//! Ports of the MSVC standard library's random number machinery that upstream relies on (risk R2 in
-//! `docs/PORTING_PLAN.md`): `std::default_random_engine`, which is `std::mt19937` on MSVC, and
-//! `std::uniform_real_distribution<float>` as implemented by MSVC's `<random>` (VS 2022 17.14).
+//! Ports of the MSVC C and C++ library random number generators that upstream relies on (risk R2 in
+//! `docs/PORTING_PLAN.md`): the C library's `rand()` ([`CRand`]), and, crate-private, `std::default_random_engine`,
+//! which is `std::mt19937` on MSVC, with `std::uniform_real_distribution<float>` as implemented by MSVC's `<random>`
+//! (VS 2022 17.14).
+
+/// The state of the C library's `rand()` as MSVC implements it: a 32-bit LCG returning bits 16–30 of each new state.
+///
+/// Upstream draws `ReverbEffect`'s delay lengths from `rand()`, whose state MSVC keeps per thread, starting at 1 (as if
+/// `srand(1)` had been called). The port has no global state: whatever constructs reverb effects passes a `CRand`, and
+/// effects built one after another from the same `CRand` get the delays upstream's effects get when built one after
+/// another on one thread. [`CRand::default`] is a fresh thread's state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CRand {
+    state: u32,
+}
+
+impl CRand {
+    /// Largest value [`rand`](Self::rand) returns (`RAND_MAX`).
+    pub const RAND_MAX: i32 = 0x7fff;
+
+    /// The state after `srand(seed)`.
+    pub const fn new(seed: u32) -> Self {
+        Self { state: seed }
+    }
+
+    /// The next value in `0..=RAND_MAX` (`rand()`).
+    pub fn rand(&mut self) -> i32 {
+        self.state = self.state.wrapping_mul(214_013).wrapping_add(2_531_011);
+        ((self.state >> 16) & 0x7fff) as i32
+    }
+}
+
+impl Default for CRand {
+    fn default() -> Self {
+        Self::new(1)
+    }
+}
 
 const N: usize = 624;
 const M: usize = 397;
@@ -73,6 +107,19 @@ impl Default for Mt19937 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// MSVC's `rand()` on a fresh thread.
+    #[test]
+    fn c_rand_sequence() {
+        let mut r = CRand::default();
+        let values: Vec<i32> = (0..10).map(|_| r.rand()).collect();
+        assert_eq!(
+            values,
+            [
+                41, 18467, 6334, 26500, 19169, 15724, 11478, 29358, 26962, 24464
+            ]
+        );
+    }
 
     /// The C++ standard requires the 10000th draw of a default-constructed `mt19937` to be 4123659995.
     #[test]

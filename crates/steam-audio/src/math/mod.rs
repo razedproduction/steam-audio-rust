@@ -72,8 +72,28 @@ pub(crate) fn cpp_max(a: f32, b: f32) -> f32 {
     if a < b { b } else { a }
 }
 
+/// `static_cast<int>(x)` as MSVC x64 compiles it (`cvttss2si`): truncation, with NaN and values out of `i32`'s range
+/// giving `i32::MIN` (Rust's `as` saturates instead).
+#[inline]
+pub(crate) fn msvc_f32_to_i32(x: f32) -> i32 {
+    if (-2_147_483_648.0..2_147_483_648.0).contains(&x) {
+        x as i32
+    } else {
+        i32::MIN
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn msvc_float_to_int() {
+        assert_eq!(super::msvc_f32_to_i32(-2.7), -2);
+        assert_eq!(super::msvc_f32_to_i32(f32::NAN), i32::MIN);
+        assert_eq!(super::msvc_f32_to_i32(f32::INFINITY), i32::MIN);
+        assert_eq!(super::msvc_f32_to_i32(3e9), i32::MIN);
+        assert_eq!(super::msvc_f32_to_i32(-2_147_483_648.0), i32::MIN);
+    }
+
     use super::*;
 
     #[test]
