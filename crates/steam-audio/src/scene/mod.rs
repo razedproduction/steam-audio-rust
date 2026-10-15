@@ -18,8 +18,13 @@ pub use instanced_mesh::InstancedMesh;
 pub use mesh::{Hit, Material, Mesh, Triangle};
 pub use static_mesh::StaticMesh;
 
+use crate::error::{Error, Result};
 use crate::geometry::{Aabb, Ray};
 use crate::math::{Matrix4, Vector3, Vector4};
+use crate::serialization::{Builder, Table};
+
+// Vtable slot of `ipl.Serialized.Scene`.
+const VT_STATIC_MESHES: u16 = 4;
 
 /// Something rays can be traced through (upstream `IScene`'s ray queries).
 ///
@@ -438,6 +443,50 @@ impl Scene {
         self.instanced_meshes.collect(|key| {
             committed.contains(&InstancedMeshId(key)) || pending.contains(&InstancedMeshId(key))
         });
+    }
+
+    /// Serializes the committed static meshes, in order, as a FlatBuffer (schema `ipl.Serialized.Scene`; upstream
+    /// `serializeAsRoot`). A mesh added twice is written twice; instanced meshes and uncommitted changes are not
+    /// written.
+    pub fn serialize(&self) -> Vec<u8> {
+        let mut builder = Builder::new();
+        let static_meshes: Vec<_> = self
+            .committed_static_meshes()
+            .map(|mesh| mesh.serialize_into(&mut builder))
+            .collect();
+        let static_meshes = builder.create_vector_of_offsets(&static_meshes);
+
+        let start = builder.start_table();
+        builder.add_offset(VT_STATIC_MESHES, Some(static_meshes));
+        let root = builder.end_table(start);
+        builder.finish(root)
+    }
+
+    /// Reads a scene written by [`serialize`](Self::serialize) (upstream `Scene(SerializedObject&)`,
+    /// `SceneFactory::create` with a serialized object). Every static mesh is stored, added and committed, at version
+    /// 0.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::MalformedSerializedData`](crate::Error::MalformedSerializedData) if the data is not a valid
+    /// serialized scene: no static meshes (which upstream asserts against) or a malformed one (see
+    /// [`StaticMesh::deserialize`]).
+    pub fn deserialize(data: &[u8]) -> Result<Self> {
+        let static_meshes = Table::root(data)?
+            .vector(VT_STATIC_MESHES, 4)?
+            .filter(|v| v.len() > 0)
+            .ok_or(Error::MalformedSerializedData(
+                "scene without static meshes",
+            ))?;
+
+        let mut scene = Self::new();
+        for i in 0..static_meshes.len() {
+            let mesh = StaticMesh::from_table(&static_meshes.table(i)?)?;
+            let id = scene.insert_static_mesh(mesh);
+            scene.static_lists[PENDING].push(id);
+        }
+        scene.static_lists[COMMITTED] = scene.static_lists[PENDING].clone();
+        Ok(scene)
     }
 
     /// Writes the committed geometry as a Wavefront OBJ file and a `.mtl` file next to it (upstream `dumpObj`).

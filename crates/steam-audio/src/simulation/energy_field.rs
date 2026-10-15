@@ -4,11 +4,18 @@
 
 use crate::array_math;
 use crate::bands::NUM_BANDS;
+use crate::error::{Error, Result};
+use crate::serialization::{Builder, Offset, Table};
 use crate::sh::num_coeffs_for_order;
+
+// Vtable slots of `ipl.Serialized.EnergyField`.
+const VT_NUM_CHANNELS: u16 = 4;
+const VT_NUM_BINS: u16 = 6;
+const VT_DATA: u16 = 8;
 
 /// A `channels × bands × bins` array of energies (upstream `EnergyField`). The default value is empty.
 ///
-/// Upstream's `swap` is [`std::mem::swap`]. Serialization comes with the rest of stage 6's serialization.
+/// Upstream's `swap` is [`std::mem::swap`].
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct EnergyField {
     num_channels: usize,
@@ -132,6 +139,73 @@ impl EnergyField {
                 );
             }
         }
+    }
+
+    /// Upstream `serializedSize`: the bytes of the two dimensions and the energies, an estimate that leaves out the
+    /// FlatBuffers overhead.
+    pub fn serialized_size(&self) -> u64 {
+        (2 * size_of::<i32>() + self.data.len() * size_of::<f32>()) as u64
+    }
+
+    /// Serializes the field as the root of its own FlatBuffer (schema `ipl.Serialized.EnergyField`). Upstream only
+    /// embeds energy fields in baked data; this writes the same table upstream's `serialize` adds there.
+    pub fn serialize(&self) -> Vec<u8> {
+        let mut builder = Builder::new();
+        let root = self.serialize_into(&mut builder);
+        builder.finish(root)
+    }
+
+    /// Reads a field written by [`serialize`](Self::serialize).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::MalformedSerializedData`](crate::Error::MalformedSerializedData) if the data is not a valid
+    /// serialized field, including one with no channels or no bins (which upstream asserts against).
+    pub fn deserialize(data: &[u8]) -> Result<Self> {
+        Self::from_table(&Table::root(data)?)
+    }
+
+    /// Upstream `serialize`.
+    pub(crate) fn serialize_into(&self, builder: &mut Builder) -> Offset {
+        let data = builder.create_vector(self.data.len(), 4, |bytes| {
+            for (out, x) in bytes.chunks_exact_mut(4).zip(&self.data) {
+                out.copy_from_slice(&x.to_le_bytes());
+            }
+        });
+        let num_channels = i32::try_from(self.num_channels).expect("channel count fits in i32");
+        let num_bins = i32::try_from(self.num_bins).expect("bin count fits in i32");
+
+        let start = builder.start_table();
+        builder.add_offset(VT_DATA, Some(data));
+        builder.add_i32(VT_NUM_BINS, num_bins, 0);
+        builder.add_i32(VT_NUM_CHANNELS, num_channels, 0);
+        builder.end_table(start)
+    }
+
+    /// Upstream `EnergyField(const Serialized::EnergyField*)`. Energies past the field's size are ignored.
+    pub(crate) fn from_table(table: &Table<'_>) -> Result<Self> {
+        let malformed = Error::MalformedSerializedData;
+        let num_channels = usize::try_from(table.i32(VT_NUM_CHANNELS, 0)?)
+            .ok()
+            .filter(|&n| n > 0)
+            .ok_or(malformed("energy field without channels"))?;
+        let num_bins = usize::try_from(table.i32(VT_NUM_BINS, 0)?)
+            .ok()
+            .filter(|&n| n > 0)
+            .ok_or(malformed("energy field without bins"))?;
+        let data = table
+            .vector(VT_DATA, 4)?
+            .ok_or(malformed("energy field without data"))?;
+
+        let total = num_channels
+            .checked_mul(NUM_BANDS * num_bins)
+            .filter(|&n| n <= data.len())
+            .ok_or(malformed("energy field data too short"))?;
+        Ok(Self {
+            num_channels,
+            num_bins,
+            data: data.f32s().take(total).collect(),
+        })
     }
 
     fn offset(&self, channel: usize, band: usize) -> usize {

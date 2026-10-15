@@ -32,6 +32,12 @@ pub enum Error {
     /// (upstream `Status::Failure`).
     #[error("SOFA HRTF has non-zero Data.Delay values, which are not supported")]
     UnsupportedSofaDelay,
+
+    /// Serialized data is truncated, is not a FlatBuffer of the expected schema, or describes an invalid object
+    /// (missing or empty arrays, indices out of range). Upstream does not check: its debug builds assert and its
+    /// release builds read out of bounds.
+    #[error("malformed serialized data: {0}")]
+    MalformedSerializedData(&'static str),
 }
 
 /// A [`sofa::Error`] that can be cloned and compared. Two errors are equal when libmysofa reports the same status

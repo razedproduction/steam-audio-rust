@@ -1,6 +1,12 @@
 use crate::bands::NUM_BANDS;
+use crate::error::{Error, Result};
 use crate::geometry::Ray;
 use crate::math::Vector3;
+use crate::serialization::{Builder, Offset, Table};
+
+// Vtable slots of `ipl.Serialized.Mesh`.
+const VT_VERTICES: u16 = 4;
+const VT_TRIANGLES: u16 = 6;
 
 /// An acoustic material (upstream `Material`): per-band absorption and transmission coefficients and one
 /// random-incidence scattering coefficient.
@@ -140,5 +146,65 @@ impl Mesh {
     pub fn intersect(&self, ray: &Ray, i: usize) -> f32 {
         let [v0, v1, v2] = self.triangle_vertices(i);
         ray.intersect_triangle(v0, v1, v2)
+    }
+
+    /// Upstream `serialize`. The schema declares a triangle's indices as floats, but upstream copies its `int`
+    /// indices into them bit for bit, so the bytes are the indices'.
+    pub(crate) fn serialize_into(&self, builder: &mut Builder) -> Offset {
+        let vertices =
+            builder.create_uninitialized_vector_of_structs(self.vertices.len(), 12, |bytes| {
+                for (out, v) in bytes.chunks_exact_mut(12).zip(&self.vertices) {
+                    out[0..4].copy_from_slice(&v.x.to_le_bytes());
+                    out[4..8].copy_from_slice(&v.y.to_le_bytes());
+                    out[8..12].copy_from_slice(&v.z.to_le_bytes());
+                }
+            });
+        let triangles = builder.create_vector_of_structs(self.triangles.len(), 12, |bytes| {
+            for (out, t) in bytes.chunks_exact_mut(12).zip(&self.triangles) {
+                for (word, index) in out.chunks_exact_mut(4).zip(t.indices) {
+                    word.copy_from_slice(&index.to_le_bytes());
+                }
+            }
+        });
+
+        let start = builder.start_table();
+        builder.add_offset(VT_TRIANGLES, Some(triangles));
+        builder.add_offset(VT_VERTICES, Some(vertices));
+        builder.end_table(start)
+    }
+
+    /// Upstream `Mesh(const Serialized::Mesh*)`: copies the geometry and computes the normals.
+    pub(crate) fn from_table(table: &Table<'_>) -> Result<Self> {
+        let malformed = Error::MalformedSerializedData;
+        let vertices = table
+            .vector(VT_VERTICES, 12)?
+            .filter(|v| v.len() > 0)
+            .ok_or(malformed("mesh without vertices"))?;
+        let triangles = table
+            .vector(VT_TRIANGLES, 12)?
+            .filter(|t| t.len() > 0)
+            .ok_or(malformed("mesh without triangles"))?;
+
+        let vertices: Vec<Vector3> = (0..vertices.len())
+            .map(|i| {
+                let mut xyz = vertices.words(i).map(f32::from_le_bytes);
+                let mut next = || xyz.next().expect("12-byte vertex");
+                Vector3::new(next(), next(), next())
+            })
+            .collect();
+        let triangles = (0..triangles.len())
+            .map(|i| {
+                let mut indices = [0; 3];
+                for (index, word) in indices.iter_mut().zip(triangles.words(i)) {
+                    *index = u32::try_from(i32::from_le_bytes(word))
+                        .ok()
+                        .filter(|&index| (index as usize) < vertices.len())
+                        .ok_or(malformed("triangle vertex index out of range"))?;
+                }
+                Ok(Triangle { indices })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(Self::new(&vertices, &triangles))
     }
 }
