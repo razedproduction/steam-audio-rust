@@ -72,7 +72,7 @@ Planned scope, mirroring the feature areas of the original library. Boxes are ch
 - [ ] **Reflections**: real-time and baked sound propagation *(energy fields, impulse responses and the reconstructor done; reverb, the reflection simulator and baking to go)*
 - [ ] **Pathing**: diffraction and occlusion-aware paths between source and listener
 - [ ] **C API compatibility layer**: drop-in replacement for the original `phonon` interface
-- [ ] **Bevy integration**: a `bevy_steam_audio` crate on top of the engine-agnostic core
+- [ ] **pragma.core integration**: a `pragma.component-audio` component for [pragma.core](https://github.com/razedproduction/pragma.core), a separate `pragma_component_audio` crate on top of the engine-agnostic core
 
 ## Repository layout
 

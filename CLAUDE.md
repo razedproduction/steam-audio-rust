@@ -75,7 +75,8 @@ Goldens are generated **only with MSVC on Windows x64** (upstream RNG and libm a
 - `f32` only (upstream's `double` instantiations are unused). Edition 2024, MSRV 1.85.
 - No `unsafe` (workspace lint `deny`). No allocation in per-buffer audio processing: allocate in constructors and
   write into caller-provided outputs.
-- The core stays engine-agnostic: no Bevy, no globals, `Send` types. A Bevy crate comes later (plan stage 9).
+- The core stays engine-agnostic: no engine dependency, no globals, `Send` types. The engine integration comes later
+  (plan stage 9) as `pragma.component-audio`, a separate crate (`pragma_component_audio`) for pragma.core that depends on `steam-audio`.
 - Complex numbers: `steam_audio::Complex` (`num_complex::Complex<f32>`, shared with `rustfft`).
 - Panic on violated preconditions (shape or length mismatch); return `Result` for input-dependent failures.
 
