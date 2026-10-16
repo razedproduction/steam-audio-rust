@@ -15,7 +15,8 @@ use common::{ObjMesh, assign_materials, draw_vector, draw01, load_obj, static_me
 use parity::{Lcg, Tolerance, golden};
 use steam_audio::air_absorption::AirAbsorptionModel;
 use steam_audio::baking::{
-    BakedDataIdentifier, BakedDataType, BakedDataVariation, ReflectionBakeParams, ReflectionBaker,
+    BakedData, BakedDataIdentifier, BakedDataType, BakedDataVariation, ReflectionBakeParams,
+    ReflectionBaker,
 };
 use steam_audio::bands::NUM_BANDS;
 use steam_audio::directivity::Directivity;
@@ -211,6 +212,73 @@ const BAKES: [Bake; 5] = [
     bake(Layer::Source, true, false, 128, 6, 0.2, 0.2, 1, 1.0, 4),
 ];
 
+/// Compares a baked batch with the golden one: byte for byte on Windows; elsewhere libm (`powf`, `sinf`, `cosf`,
+/// `logf`) may differ by an ulp, so the layers are deserialized and compared with tolerances: flags `EXACT`, energy
+/// fields `peak_relative(1e-5)` per field, reverbs `F32`.
+#[track_caller]
+fn check_baked_batch(name: &str, batch: &ProbeBatch) {
+    let golden_bytes = golden::<u8>(&format!("simulation/{name}")).data;
+    if cfg!(windows) {
+        check(name, &batch.serialize(), Tolerance::EXACT);
+    }
+
+    let expected = ProbeBatch::deserialize(&golden_bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+    assert_eq!(batch.probes(), expected.probes(), "{name}");
+    let layers: Vec<_> = batch.data_layers().collect();
+    let expected_layers: Vec<_> = expected.data_layers().collect();
+    assert_eq!(layers.len(), expected_layers.len(), "{name}");
+    for ((id, data), (expected_id, expected_data)) in layers.into_iter().zip(expected_layers) {
+        assert_eq!(id, expected_id, "{name}");
+        let (BakedData::Reflections(data), BakedData::Reflections(expected_data)) =
+            (data, expected_data)
+        else {
+            panic!("{name}: not reflections");
+        };
+        assert_eq!(
+            data.has_convolution(),
+            expected_data.has_convolution(),
+            "{name}"
+        );
+        assert_eq!(
+            data.has_parametric(),
+            expected_data.has_parametric(),
+            "{name}"
+        );
+        for i in 0..batch.num_probes() {
+            assert_eq!(
+                data.needs_update(i),
+                expected_data.needs_update(i),
+                "{name} probe {i}"
+            );
+            // Only what is serialized: fields and reverbs of baked probes.
+            if data.needs_update(i) {
+                continue;
+            }
+            match (data.energy_field(i), expected_data.energy_field(i)) {
+                (Some(a), Some(e)) => {
+                    assert_eq!(
+                        (a.num_channels(), a.num_bins()),
+                        (e.num_channels(), e.num_bins())
+                    );
+                    if let Err(m) = parity::compare(
+                        a.data(),
+                        e.data(),
+                        Tolerance::peak_relative(e.data(), 1e-5),
+                    ) {
+                        panic!("{name} probe {i} field: {m}");
+                    }
+                }
+                (a, e) => assert_eq!(a.is_some(), e.is_some(), "{name} probe {i} field"),
+            }
+            if let (Some(a), Some(e)) = (data.reverb(i), expected_data.reverb(i)) {
+                if let Err(m) = parity::compare(&a.reverb_times, &e.reverb_times, Tolerance::F32) {
+                    panic!("{name} probe {i} reverb: {m}");
+                }
+            }
+        }
+    }
+}
+
 /// Runs the generator's bakes into `setup.batch`; `check_goldens` compares each step with the goldens.
 fn run_bakes(setup: &mut Setup, check_goldens: bool) {
     let settings = ReflectionSimulatorSettings {
@@ -260,8 +328,7 @@ fn run_bakes(setup: &mut Setup, check_goldens: bool) {
         );
 
         if check_goldens {
-            let bytes = setup.batch.serialize();
-            check(&format!("bake_{k}"), &bytes, Tolerance::EXACT);
+            check_baked_batch(&format!("bake_{k}"), &setup.batch);
             check(&format!("bake_{k}_progress"), &progress, Tolerance::EXACT);
         }
     }
