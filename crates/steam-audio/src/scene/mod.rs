@@ -4,10 +4,10 @@
 //! [`Scene`] is upstream's default scene type. Upstream's `CustomScene` (user callbacks) is the [`RayTracer`]
 //! trait: implement it for your own type. Embree and Radeon Rays scenes are out of scope.
 
-mod bvh;
+pub(crate) mod bvh;
 mod instanced_mesh;
 mod mesh;
-mod msvc_sort;
+pub(crate) mod msvc_sort;
 mod static_mesh;
 
 use std::io::{self, Write};

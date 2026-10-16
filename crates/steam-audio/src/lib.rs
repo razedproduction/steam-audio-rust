@@ -7,6 +7,7 @@
 pub mod air_absorption;
 pub mod array_math;
 pub mod audio_buffer;
+pub mod baking;
 pub mod bands;
 pub mod delay;
 pub mod directivity;
@@ -19,6 +20,7 @@ pub mod hrtf;
 pub mod iir;
 pub mod job_graph;
 pub mod math;
+pub mod probes;
 pub mod propagation_medium;
 pub mod random;
 pub mod sampling;

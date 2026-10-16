@@ -1,9 +1,10 @@
 //! Simulation of sound propagation through a scene. So far: the direct path (upstream `direct_simulator`), the energy
 //! fields and impulse responses of reflections with their reconstruction (upstream `energy_field`,
 //! `impulse_response`, `reconstructor`), reverb estimation (upstream `reverb_estimator`,
-//! `hybrid_reverb_estimator`), and the reflection simulators that produce energy fields (upstream
-//! `reflection_simulator`).
+//! `hybrid_reverb_estimator`), the reflection simulators that produce energy fields (upstream
+//! `reflection_simulator`), and lookups of baked reflections at probes (upstream `baked_reflection_simulator`).
 
+pub mod baked_reflection;
 pub mod direct;
 pub mod energy_field;
 pub mod hybrid_reverb_estimator;
