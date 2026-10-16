@@ -26,6 +26,7 @@ add_executable(golden
     ${GOLDEN_DIR}/src/reflection_simulator.cpp
     ${GOLDEN_DIR}/src/serialization.cpp
     ${GOLDEN_DIR}/src/probes.cpp
+    ${GOLDEN_DIR}/src/simulation.cpp
 )
 
 target_link_libraries(golden PRIVATE core hrtf)

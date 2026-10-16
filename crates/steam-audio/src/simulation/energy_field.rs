@@ -127,6 +127,13 @@ impl EnergyField {
         }
     }
 
+    /// `self = self * scalar`: upstream's `scale(self, scalar, self)`.
+    pub(crate) fn scale_in_place(&mut self, scalar: f32) {
+        for x in &mut self.data {
+            *x *= scalar;
+        }
+    }
+
     /// `out += input * scalar` over the channels and bins both have.
     pub fn scale_accumulate(input: &Self, scalar: f32, out: &mut Self) {
         let (num_channels, n) = common_size(input, out);

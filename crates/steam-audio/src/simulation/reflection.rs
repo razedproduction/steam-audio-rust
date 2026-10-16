@@ -7,6 +7,7 @@
 //! [`RayTracer`]. Both draw from a random number generator per thread, so results depend on the seed, on the number of
 //! threads and on which thread runs which batch of rays (risk R2).
 
+use std::borrow::BorrowMut;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
@@ -278,10 +279,10 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 /// What `simulate` does before adding jobs, common to both simulators: checks the inputs, resets the output and
 /// per-thread fields, and returns the number of sources to simulate.
-fn begin<S: AsMut<[EnergyField]>>(
+fn begin<S: AsMut<[EnergyField]>, F: BorrowMut<EnergyField>>(
     settings: &ReflectionSimulatorSettings,
     params: &ReflectionSimulationParams<'_>,
-    energy_fields: &mut [EnergyField],
+    energy_fields: &mut [F],
     thread_fields: &mut [Mutex<S>],
     pool: &ThreadPool,
 ) -> usize {
@@ -311,7 +312,7 @@ fn begin<S: AsMut<[EnergyField]>>(
     );
 
     for (i, field) in energy_fields.iter_mut().enumerate().take(num_sources) {
-        field.reset();
+        field.borrow_mut().reset();
         for state in thread_fields.iter_mut() {
             state.get_mut().unwrap_or_else(|e| e.into_inner()).as_mut()[i].reset();
         }
@@ -321,14 +322,16 @@ fn begin<S: AsMut<[EnergyField]>>(
 }
 
 /// Adds every thread's fields to the outputs (upstream `finalizeJob`).
-fn finalize<S: AsMut<[EnergyField]>>(
-    energy_fields: &mut [EnergyField],
+fn finalize<S: AsMut<[EnergyField]>, F: BorrowMut<EnergyField>>(
+    energy_fields: &mut [F],
     thread_fields: &mut [Mutex<S>],
     num_sources: usize,
 ) {
     for (i, field) in energy_fields.iter_mut().enumerate().take(num_sources) {
         for state in thread_fields.iter_mut() {
-            field.add_assign(&state.get_mut().unwrap_or_else(|e| e.into_inner()).as_mut()[i]);
+            field
+                .borrow_mut()
+                .add_assign(&state.get_mut().unwrap_or_else(|e| e.into_inner()).as_mut()[i]);
         }
     }
 }
@@ -413,18 +416,19 @@ impl ReflectionSimulator {
     /// into `energy_fields` (upstream `simulate` with energy fields, followed by `ThreadPool::process`). Only the
     /// channels and bins both an output field and the simulator's fields have are written.
     ///
-    /// If the pool is cancelled before every job has run, the outputs are left silent.
+    /// If the pool is cancelled before every job has run, the outputs are left silent. The fields may be owned
+    /// (`&mut [EnergyField]`) or borrowed from elsewhere (`&mut [&mut EnergyField]`).
     ///
     /// # Panics
     ///
     /// If `params` has more rays than the simulator or not one directivity per source, `energy_fields` has fewer
     /// fields than the sources simulated, `pool` has more threads than the simulator, or a diffuse bounce happens
     /// with no diffuse samples.
-    pub fn simulate(
+    pub fn simulate<F: BorrowMut<EnergyField>>(
         &mut self,
         scene: &dyn RayTracer,
         params: &ReflectionSimulationParams<'_>,
-        energy_fields: &mut [EnergyField],
+        energy_fields: &mut [F],
         pool: &ThreadPool,
     ) {
         let num_sources = begin(
@@ -656,11 +660,11 @@ impl BatchedReflectionSimulator {
     /// # Panics
     ///
     /// As [`ReflectionSimulator::simulate`].
-    pub fn simulate(
+    pub fn simulate<F: BorrowMut<EnergyField>>(
         &mut self,
         scene: &dyn RayTracer,
         params: &ReflectionSimulationParams<'_>,
-        energy_fields: &mut [EnergyField],
+        energy_fields: &mut [F],
         pool: &ThreadPool,
     ) {
         let num_sources = begin(
@@ -871,6 +875,57 @@ fn batched_shade(
         );
         state.energy[k] = energy;
         state.delay[k] = delay;
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// AnyReflectionSimulator
+// ---------------------------------------------------------------------------------------------------------------------
+
+/// Either reflection simulator (upstream `IReflectionSimulator`, as created by `ReflectionSimulatorFactory`):
+/// [`ReflectionSimulator`] for upstream's own ray tracer, [`BatchedReflectionSimulator`] for custom ray tracers.
+#[derive(Debug)]
+pub enum AnyReflectionSimulator {
+    Default(ReflectionSimulator),
+    Batched(BatchedReflectionSimulator),
+}
+
+impl AnyReflectionSimulator {
+    pub fn settings(&self) -> &ReflectionSimulatorSettings {
+        match self {
+            Self::Default(simulator) => simulator.settings(),
+            Self::Batched(simulator) => simulator.settings(),
+        }
+    }
+
+    /// As [`ReflectionSimulator::simulate`].
+    ///
+    /// # Panics
+    ///
+    /// As [`ReflectionSimulator::simulate`].
+    pub fn simulate<F: BorrowMut<EnergyField>>(
+        &mut self,
+        scene: &dyn RayTracer,
+        params: &ReflectionSimulationParams<'_>,
+        energy_fields: &mut [F],
+        pool: &ThreadPool,
+    ) {
+        match self {
+            Self::Default(simulator) => simulator.simulate(scene, params, energy_fields, pool),
+            Self::Batched(simulator) => simulator.simulate(scene, params, energy_fields, pool),
+        }
+    }
+}
+
+impl From<ReflectionSimulator> for AnyReflectionSimulator {
+    fn from(simulator: ReflectionSimulator) -> Self {
+        Self::Default(simulator)
+    }
+}
+
+impl From<BatchedReflectionSimulator> for AnyReflectionSimulator {
+    fn from(simulator: BatchedReflectionSimulator) -> Self {
+        Self::Batched(simulator)
     }
 }
 

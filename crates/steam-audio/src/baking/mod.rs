@@ -1,12 +1,15 @@
 //! Data baked at probes (upstream `probe_data.h`, `baked_reflection_data`): what a [`ProbeBatch`] stores per data
-//! layer, keyed by a [`BakedDataIdentifier`].
+//! layer, keyed by a [`BakedDataIdentifier`], and the [`ReflectionBaker`] that computes reflections layers (upstream
+//! `reflection_baker`).
 //!
 //! [`ProbeBatch`]: crate::probes::ProbeBatch
 
+mod baker;
 mod reflections;
 
 use std::cmp::Ordering;
 
+pub use baker::{ReflectionBakeParams, ReflectionBaker};
 pub use reflections::BakedReflectionsData;
 
 use crate::geometry::Sphere;
