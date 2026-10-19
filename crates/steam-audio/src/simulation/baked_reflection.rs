@@ -37,6 +37,7 @@ fn reflections_data<'a, B: Borrow<ProbeBatch>>(
 ) -> Option<&'a crate::baking::BakedReflectionsData> {
     match batches[batch].borrow().data(identifier)? {
         BakedData::Reflections(data) => Some(data),
+        BakedData::Pathing(_) => None,
     }
 }
 

@@ -220,6 +220,25 @@ impl Builder {
         }
     }
 
+    /// Adds a 32-bit float field unless it equals its default as compared with `==`, so `-0.0` is left out like
+    /// `0.0` and NaN is always written (upstream `AddElement<float>`).
+    pub(crate) fn add_f32(&mut self, slot: u16, value: f32, default: f32) {
+        if value != default {
+            let offset = self.push_u32(value.to_bits());
+            self.track_field(slot, offset);
+        }
+    }
+
+    /// Adds a 16-bit integer field unless it equals its default (upstream `AddElement<int16_t>`).
+    pub(crate) fn add_i16(&mut self, slot: u16, value: i16, default: i16) {
+        if value != default {
+            self.align(2);
+            self.push_bytes(&value.to_le_bytes());
+            let offset = self.size();
+            self.track_field(slot, offset);
+        }
+    }
+
     /// Adds an 8-bit integer field unless it equals its default (upstream `AddElement<int8_t>`).
     pub(crate) fn add_i8(&mut self, slot: u16, value: i8, default: i8) {
         if value != default {
@@ -380,6 +399,20 @@ impl<'a> Table<'a> {
     pub(crate) fn i32(&self, slot: u16, default: i32) -> Result<i32> {
         match self.field(slot)? {
             Some(pos) => read(self.buf, pos).map(i32::from_le_bytes),
+            None => Ok(default),
+        }
+    }
+
+    pub(crate) fn f32(&self, slot: u16, default: f32) -> Result<f32> {
+        match self.field(slot)? {
+            Some(pos) => read(self.buf, pos).map(f32::from_le_bytes),
+            None => Ok(default),
+        }
+    }
+
+    pub(crate) fn i16(&self, slot: u16, default: i16) -> Result<i16> {
+        match self.field(slot)? {
+            Some(pos) => read(self.buf, pos).map(i16::from_le_bytes),
             None => Ok(default),
         }
     }

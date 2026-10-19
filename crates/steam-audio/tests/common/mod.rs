@@ -169,6 +169,24 @@ pub fn committed_sub_scene(obj: &ObjMesh) -> Arc<Scene> {
     Arc::new(scene)
 }
 
+/// The bounding box of the OBJ's vertices (the generators' `meshBounds`).
+pub fn mesh_bounds(obj: &ObjMesh) -> Aabb {
+    let mut bounds = Aabb::EMPTY;
+    for v in &obj.vertices {
+        bounds.min = Vector3::new(
+            bounds.min.x.min(v.x),
+            bounds.min.y.min(v.y),
+            bounds.min.z.min(v.z),
+        );
+        bounds.max = Vector3::new(
+            bounds.max.x.max(v.x),
+            bounds.max.y.max(v.y),
+            bounds.max.z.max(v.z),
+        );
+    }
+    bounds
+}
+
 // ---------------------------------------------------------------------------------------------------------------------
 // Lcg draws
 // ---------------------------------------------------------------------------------------------------------------------

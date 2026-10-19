@@ -8,6 +8,7 @@ use crate::baking::{
 use crate::error::{Error, Result};
 use crate::geometry::Sphere;
 use crate::math::Vector3;
+use crate::pathing::BakedPathData;
 use crate::serialization::{Builder, Offset, Table};
 
 use super::{Probe, ProbeNeighborhood, ProbeTree};
@@ -16,9 +17,10 @@ use super::{Probe, ProbeNeighborhood, ProbeTree};
 const VT_PROBES: u16 = 4;
 const VT_DATA_LAYERS: u16 = 6;
 
-// Vtable slots of `ipl.Serialized.BakedDataLayer` (`pathing_data` is slot 8).
+// Vtable slots of `ipl.Serialized.BakedDataLayer`.
 const VT_IDENTIFIER: u16 = 4;
 const VT_REFLECTIONS_DATA: u16 = 6;
+const VT_PATHING_DATA: u16 = 8;
 
 // Vtable slots of `ipl.Serialized.BakedDataIdentifier`.
 const VT_VARIATION: u16 = 4;
@@ -181,7 +183,7 @@ impl ProbeBatch {
     /// # Errors
     ///
     /// [`Error::MalformedSerializedData`](crate::Error::MalformedSerializedData) if the data is not a valid
-    /// serialized batch, including one without probes and one with baked pathing data (ported in stage 7).
+    /// serialized batch, including one without probes.
     pub fn deserialize(data: &[u8]) -> Result<Self> {
         Self::from_table(&Table::root(data)?)
     }
@@ -207,12 +209,14 @@ impl ProbeBatch {
                 builder.add_i8(VT_VARIATION, identifier.variation as i8, 0);
                 let identifier = builder.end_table(start);
 
-                let reflections = match data {
-                    BakedData::Reflections(data) => data.serialize_into(builder),
+                let (reflections, pathing) = match data {
+                    BakedData::Reflections(data) => (Some(data.serialize_into(builder)), None),
+                    BakedData::Pathing(data) => (None, Some(data.serialize_into(builder))),
                 };
 
                 let start = builder.start_table();
-                builder.add_offset(VT_REFLECTIONS_DATA, Some(reflections));
+                builder.add_offset(VT_PATHING_DATA, pathing);
+                builder.add_offset(VT_REFLECTIONS_DATA, reflections);
                 builder.add_offset(VT_IDENTIFIER, Some(identifier));
                 builder.end_table(start)
             })
@@ -274,9 +278,11 @@ impl ProbeBatch {
                             &reflections,
                         )?)
                     }
-                    // `pathing_data` (slot 8) is read in stage 7.
                     BakedDataType::Pathing => {
-                        return Err(malformed("baked pathing data is not supported yet"));
+                        let pathing = layer
+                            .table(VT_PATHING_DATA)?
+                            .ok_or(malformed("baked pathing layer without data"))?;
+                        BakedData::Pathing(BakedPathData::from_table(&pathing, &batch.probes)?)
                     }
                 };
                 batch.add_data(identifier, data);

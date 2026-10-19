@@ -1,5 +1,5 @@
 //! The inputs, outputs and state of one source in a [`SimulationManager`](super::SimulationManager) (upstream
-//! `simulation_data.{h,cpp}`, `SimulationData`). Pathing inputs and outputs follow in stage 7.
+//! `simulation_data.{h,cpp}`, `SimulationData`). Pathing inputs and outputs follow in stage 7b.
 
 use crate::air_absorption::AirAbsorptionModel;
 use crate::baking::{BakedDataIdentifier, BakedDataType, BakedDataVariation};

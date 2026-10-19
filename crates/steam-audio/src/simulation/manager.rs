@@ -1,6 +1,6 @@
 //! Runs the simulations of a set of sources against one listener (upstream `simulation_manager.{h,cpp}`,
 //! `SimulationManager`): direct sound, and reflections simulated in real time or looked up from baked probes, turned
-//! into impulse responses, parametric reverb or both. Pathing follows in stage 7.
+//! into impulse responses, parametric reverb or both. Pathing follows in stage 7b.
 
 use std::sync::{Arc, Mutex, MutexGuard};
 

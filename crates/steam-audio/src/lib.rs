@@ -20,6 +20,7 @@ pub mod hrtf;
 pub mod iir;
 pub mod job_graph;
 pub mod math;
+pub mod pathing;
 pub mod probes;
 pub mod propagation_medium;
 pub mod random;
