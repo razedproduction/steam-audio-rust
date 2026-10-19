@@ -245,6 +245,27 @@ fn pop_heap_hole_by_index<T: Copy>(
     push_heap_by_index(v, hole, top, value, less);
 }
 
+/// `std::priority_queue::push` on a heap kept in `v` (`push_back`, then `push_heap`).
+pub(crate) fn push_heap<T: Copy>(v: &mut Vec<T>, value: T, less: impl Fn(&T, &T) -> bool) {
+    v.push(value);
+    let hole = v.len() - 1;
+    push_heap_by_index(v, hole, 0, value, less);
+}
+
+/// `std::priority_queue::pop` on a heap kept in `v` (`pop_heap`, then `pop_back`): removes and returns the top.
+/// Panics if `v` is empty.
+pub(crate) fn pop_heap<T: Copy>(v: &mut Vec<T>, less: impl Fn(&T, &T) -> bool + Copy) -> T {
+    let top = v[0];
+    let last = v.len() - 1;
+    if last >= 1 {
+        let value = v[last];
+        v[last] = v[0];
+        pop_heap_hole_by_index(v, 0, last, value, less);
+    }
+    v.pop();
+    top
+}
+
 fn make_heap<T: Copy>(v: &mut [T], less: impl Fn(&T, &T) -> bool + Copy) {
     let bottom = v.len();
     let mut hole = bottom >> 1;
@@ -299,6 +320,22 @@ mod tests {
                 assert!(indices.iter().copied().eq(0..n));
             }
         }
+    }
+
+    #[test]
+    fn priority_queue_pops_in_order() {
+        let less = |a: &(u32, usize), b: &(u32, usize)| a.0 > b.0;
+        let mut heap = Vec::new();
+        let mut expected = values(300, 40, 9);
+        for &value in &expected {
+            push_heap(&mut heap, value, less);
+        }
+        expected.sort_by_key(|x| x.0);
+        let popped: Vec<u32> = (0..expected.len())
+            .map(|_| pop_heap(&mut heap, less).0)
+            .collect();
+        assert!(heap.is_empty());
+        assert!(popped.iter().copied().eq(expected.iter().map(|x| x.0)));
     }
 
     #[test]

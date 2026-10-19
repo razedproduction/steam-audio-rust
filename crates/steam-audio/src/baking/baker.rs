@@ -83,7 +83,8 @@ impl ReflectionBaker {
 
         self.bake_in_progress.store(true, Ordering::SeqCst);
 
-        if !batch.has_data(identifier) {
+        // A layer of other data under this identifier is replaced (upstream would treat it as reflections).
+        if !matches!(batch.data(identifier), Some(BakedData::Reflections(_))) {
             batch.add_data(
                 *identifier,
                 BakedData::Reflections(BakedReflectionsData::new(
@@ -201,5 +202,6 @@ fn reflections_data<'a>(
         .expect("the layer was added before baking")
     {
         BakedData::Reflections(data) => data,
+        BakedData::Pathing(_) => unreachable!("the layer was added as reflections"),
     }
 }

@@ -6,7 +6,7 @@ mod common;
 use std::sync::Arc;
 
 use common::{
-    ObjMesh, committed_sub_scene, draw_point, draw_transform, draw_vector, draw01, load_obj,
+    committed_sub_scene, draw_point, draw_transform, draw_vector, draw01, load_obj, mesh_bounds,
 };
 use parity::{Lcg, Tolerance, golden};
 use steam_audio::Error;
@@ -34,23 +34,6 @@ fn check<T: parity::Element + Into<f64> + Copy>(name: &str, actual: &[T], tol: T
 
 fn indices(entries: &[Option<usize>]) -> impl Iterator<Item = i32> + '_ {
     entries.iter().map(|e| e.map_or(-1, |i| i as i32))
-}
-
-fn mesh_bounds(obj: &ObjMesh) -> Aabb {
-    let mut bounds = Aabb::EMPTY;
-    for v in &obj.vertices {
-        bounds.min = Vector3::new(
-            bounds.min.x.min(v.x),
-            bounds.min.y.min(v.y),
-            bounds.min.z.min(v.z),
-        );
-        bounds.max = Vector3::new(
-            bounds.max.x.max(v.x),
-            bounds.max.y.max(v.y),
-            bounds.max.z.max(v.z),
-        );
-    }
-    bounds
 }
 
 /// The generator's `boxTransform`: the box `bounds`, optionally rotated by an Lcg quaternion about its center.

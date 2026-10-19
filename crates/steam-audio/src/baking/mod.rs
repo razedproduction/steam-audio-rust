@@ -14,6 +14,7 @@ pub use reflections::BakedReflectionsData;
 
 use crate::geometry::Sphere;
 use crate::math::Vector3;
+use crate::pathing::BakedPathData;
 use crate::probes::Probe;
 
 /// What a layer of baked data describes (upstream `BakedDataVariation`, serialized as a byte).
@@ -32,7 +33,6 @@ pub enum BakedDataVariation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum BakedDataType {
     Reflections = 0,
-    /// Pathing data, ported in stage 7.
     Pathing = 1,
 }
 
@@ -127,11 +127,14 @@ impl PartialEq for BakedDataIdentifier {
 
 impl Eq for BakedDataIdentifier {}
 
-/// A layer of baked data (upstream `IBakedData`). Pathing data (upstream `BakedPathData`) follows in stage 7.
+/// A layer of baked data (upstream `IBakedData`).
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum BakedData {
     Reflections(BakedReflectionsData),
+    /// Paths between probes. Any change to the probes makes it need baking again
+    /// ([`BakedPathData::needs_update`]).
+    Pathing(BakedPathData),
 }
 
 impl BakedData {
@@ -139,18 +142,21 @@ impl BakedData {
     pub(crate) fn update_probe_position(&mut self, index: usize, position: Vector3) {
         match self {
             Self::Reflections(data) => data.update_probe_position(index, position),
+            Self::Pathing(data) => data.mark_needs_update(),
         }
     }
 
     pub(crate) fn add_probe(&mut self, influence: &Sphere) {
         match self {
             Self::Reflections(data) => data.add_probe(influence),
+            Self::Pathing(data) => data.mark_needs_update(),
         }
     }
 
     pub(crate) fn remove_probe(&mut self, index: usize) {
         match self {
             Self::Reflections(data) => data.remove_probe(index),
+            Self::Pathing(data) => data.mark_needs_update(),
         }
     }
 
@@ -162,6 +168,7 @@ impl BakedData {
     ) {
         match self {
             Self::Reflections(data) => data.update_endpoint(identifier, probes, endpoint_influence),
+            Self::Pathing(_) => {}
         }
     }
 
@@ -169,6 +176,7 @@ impl BakedData {
     pub fn serialized_size(&self) -> u64 {
         match self {
             Self::Reflections(data) => data.serialized_size(),
+            Self::Pathing(data) => data.serialized_size(),
         }
     }
 }

@@ -302,6 +302,7 @@ impl BakedReflectionsData {
         let probe = neighborhood.probe_indices[i]?;
         let other_data = match batches[batch].borrow().data(&self.identifier) {
             Some(BakedData::Reflections(data)) => !std::ptr::eq(data, self),
+            Some(BakedData::Pathing(_)) => true,
             None => false,
         };
         (!other_data).then_some(probe)
