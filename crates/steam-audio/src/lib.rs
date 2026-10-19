@@ -10,6 +10,7 @@ pub mod audio_buffer;
 pub mod baking;
 pub mod bands;
 pub mod delay;
+pub mod deviation;
 pub mod directivity;
 pub mod distance_attenuation;
 pub mod effects;

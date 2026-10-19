@@ -112,6 +112,13 @@ impl AmbisonicsPanningEffect {
     /// Does nothing, like upstream: in particular, the matrix rows kept from earlier inputs (risk R15) stay.
     pub fn reset(&mut self) {}
 
+    /// Decodes a single sample of order-`max_order` Ambisonics `coeffs` into one gain per speaker, as
+    /// [`apply`](Self::apply) decodes the first sample of a frame whose other samples are silent (upstream
+    /// `PathEffect` applies the effect to one-sample buffers).
+    pub(crate) fn pan_sample(&self, coeffs: &[f32], gains: &mut [f32]) {
+        DynamicMatrix::multiply_vector(&self.ambisonics_to_speakers, coeffs, gains);
+    }
+
     /// Decodes one frame of order-`order` Ambisonics to one channel per speaker.
     ///
     /// Like upstream (risk R15), applying a lower order than an earlier frame mixes in that frame's higher-order

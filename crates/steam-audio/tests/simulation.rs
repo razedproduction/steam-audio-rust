@@ -416,6 +416,7 @@ fn settings(scene_type: SceneType, indirect_type: IndirectEffectType) -> Simulat
     SimulationSettings {
         enable_direct: true,
         enable_indirect: true,
+        enable_pathing: false,
         scene_type,
         indirect_type,
         max_num_occlusion_samples: 16,
@@ -426,6 +427,9 @@ fn settings(scene_type: SceneType, indirect_type: IndirectEffectType) -> Simulat
         max_num_sources: 4,
         num_threads: 1,
         ray_batch_size: 16,
+        num_vis_samples: 1,
+        asymmetric_vis_range: false,
+        down: Vector3::new(0.0, -1.0, 0.0),
         sampling_rate: SAMPLING_RATE,
         frame_size: FRAME_SIZE,
     }
@@ -511,7 +515,7 @@ fn simulation_manager() {
 
         let data: Vec<SharedSimulationData> = (0..NUM_SOURCES)
             .map(|i| {
-                let mut s = SimulationData::new(&settings, true);
+                let mut s = SimulationData::new(&settings, true, false);
                 let input = &sources[i];
                 let air = AirAbsorptionModel::Exponential {
                     coefficients: input.air_coefficients,
@@ -724,7 +728,7 @@ fn custom_scene_never_accumulates() {
 
     let source = CoordinateSpace3::canonical_at(setup.probes[7].influence.center);
     let listener = CoordinateSpace3::canonical_at(setup.probes[12].influence.center);
-    let mut s = SimulationData::new(&settings, true);
+    let mut s = SimulationData::new(&settings, true, false);
     s.reflection_inputs.enabled = true;
     s.reflection_inputs.source = source;
     let s = Arc::new(Mutex::new(s));
@@ -780,7 +784,7 @@ fn probe_caching_keeps_outputs_without_probes() {
     manager.set_enable_probe_caching_for_missing_probes(true);
     manager.add_probe_batch(Arc::new(setup.batch.clone()));
 
-    let mut s = SimulationData::new(&settings, true);
+    let mut s = SimulationData::new(&settings, true, false);
     s.reflection_inputs.enabled = true;
     s.reflection_inputs.baked = true;
     s.reflection_inputs.baked_data_identifier = setup.reverb_id;

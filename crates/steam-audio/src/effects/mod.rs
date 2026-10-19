@@ -14,6 +14,7 @@ pub mod hybrid_reverb;
 pub mod overlap_add;
 pub mod overlap_save;
 pub mod panning;
+pub mod path_effect;
 pub mod reverb;
 pub mod virtual_surround;
 
@@ -38,6 +39,7 @@ pub use overlap_save::{
 pub use reverb::ReverbEffect;
 
 pub use panning::PanningEffect;
+pub use path_effect::{PathEffect, PathEffectParams, PathEffectSettings, PathSpatialization};
 pub use virtual_surround::VirtualSurroundEffect;
 
 use crate::audio_buffer::AudioEffectState;
