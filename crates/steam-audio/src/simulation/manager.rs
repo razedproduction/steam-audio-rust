@@ -1,6 +1,6 @@
 //! Runs the simulations of a set of sources against one listener (upstream `simulation_manager.{h,cpp}`,
-//! `SimulationManager`): direct sound, and reflections simulated in real time or looked up from baked probes, turned
-//! into impulse responses, parametric reverb or both. Pathing follows in stage 7b.
+//! `SimulationManager`): direct sound, reflections simulated in real time or looked up from baked probes, turned into
+//! impulse responses, parametric reverb or both, and paths around obstacles through baked probe paths.
 
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -9,7 +9,8 @@ use crate::bands::NUM_BANDS;
 use crate::directivity::Directivity;
 use crate::distance_attenuation::DistanceAttenuationModel;
 use crate::effects::OverlapSavePartitioner;
-use crate::math::CoordinateSpace3;
+use crate::math::{CoordinateSpace3, Vector3};
+use crate::pathing::{PathSimulationParams, PathSimulator};
 use crate::probes::{ProbeBatch, ProbeManager, ProbeNeighborhood};
 use crate::random::CRand;
 use crate::scene::{RayTracer, Scene};
@@ -68,11 +69,12 @@ impl std::fmt::Debug for SimulationScene {
 }
 
 /// How a [`SimulationManager`] and its sources are built (the constructor arguments of upstream `SimulationManager`
-/// and `SimulationData`, without pathing, OpenCL, Radeon Rays and TrueAudioNext).
+/// and `SimulationData`, without OpenCL, Radeon Rays and TrueAudioNext).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SimulationSettings {
     pub enable_direct: bool,
     pub enable_indirect: bool,
+    pub enable_pathing: bool,
     pub scene_type: SceneType,
     pub indirect_type: IndirectEffectType,
     pub max_num_occlusion_samples: usize,
@@ -86,6 +88,12 @@ pub struct SimulationSettings {
     pub num_threads: usize,
     /// Rays per job for a [`SceneType::Custom`] scene.
     pub ray_batch_size: usize,
+    /// Pathing: points per probe for visibility tests (see
+    /// [`ProbeVisibilityTester::new`](crate::pathing::ProbeVisibilityTester::new)).
+    pub num_vis_samples: usize,
+    /// Pathing: measure visibility ranges perpendicular to `down`.
+    pub asymmetric_vis_range: bool,
+    pub down: Vector3,
     pub sampling_rate: u32,
     pub frame_size: usize,
 }
@@ -108,6 +116,26 @@ pub struct SharedReflectionSimulationInputs {
     pub order: usize,
     pub irradiance_min_distance: f32,
     pub reconstruction_type: ReconstructionType,
+}
+
+/// Called with the two ends of each ray traced to validate a baked path, and whether it was occluded (upstream
+/// `ValidationRayVisualizationCallback` with its user data).
+pub type ValidationRayVisualizationCallback = Arc<dyn Fn(Vector3, Vector3, bool) + Send + Sync>;
+
+/// Inputs of pathing simulation shared by every source (upstream `SharedPathingSimulationInputs`).
+#[derive(Clone, Default)]
+pub struct SharedPathingSimulationInputs {
+    pub listener: CoordinateSpace3,
+    pub vis_callback: Option<ValidationRayVisualizationCallback>,
+}
+
+impl std::fmt::Debug for SharedPathingSimulationInputs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SharedPathingSimulationInputs")
+            .field("listener", &self.listener)
+            .field("vis_callback", &self.vis_callback.as_ref().map(Arc::as_ptr))
+            .finish()
+    }
 }
 
 /// A shared, lockable source, as added to a [`SimulationManager`].
@@ -135,10 +163,15 @@ pub struct SimulationManager {
     thread_pool: Option<ThreadPool>,
     shared_direct: SharedDirectSimulationInputs,
     shared_reflection: SharedReflectionSimulationInputs,
+    shared_pathing: SharedPathingSimulationInputs,
     prev_listener: CoordinateSpace3,
     pending_sources: Vec<SharedSimulationData>,
     sources: Vec<SharedSimulationData>,
+    /// A path simulator per probe batch (compared by identity), with pathing enabled.
+    pending_path_simulators: Vec<(Arc<ProbeBatch>, Arc<PathSimulator>)>,
+    path_simulators: Vec<(Arc<ProbeBatch>, Arc<PathSimulator>)>,
     enable_probe_caching_for_missing_probes: bool,
+    enable_paths_from_all_source_probes: bool,
     /// Version of the scene when real-time reflections were last simulated.
     scene_version: u32,
 
@@ -148,6 +181,8 @@ pub struct SimulationManager {
     listener_probes: ProbeNeighborhood,
     source_probes: ProbeNeighborhood,
     unique_batches: Vec<usize>,
+    pathing_source_probes: ProbeNeighborhood,
+    pathing_listener_probes: ProbeNeighborhood,
 }
 
 impl SimulationManager {
@@ -182,16 +217,22 @@ impl SimulationManager {
                 irradiance_min_distance: 1.0,
                 reconstruction_type: ReconstructionType::Linear,
             },
+            shared_pathing: SharedPathingSimulationInputs::default(),
             prev_listener: CoordinateSpace3::default(),
             pending_sources: Vec::new(),
             sources: Vec::new(),
+            pending_path_simulators: Vec::new(),
+            path_simulators: Vec::new(),
             enable_probe_caching_for_missing_probes: false,
+            enable_paths_from_all_source_probes: false,
             scene_version: 0,
             real_time_sources: Vec::new(),
             real_time_directivities: Vec::new(),
             listener_probes: ProbeNeighborhood::default(),
             source_probes: ProbeNeighborhood::default(),
             unique_batches: Vec::new(),
+            pathing_source_probes: ProbeNeighborhood::default(),
+            pathing_listener_probes: ProbeNeighborhood::default(),
         };
 
         if s.enable_indirect {
@@ -269,6 +310,12 @@ impl SimulationManager {
         self.enable_probe_caching_for_missing_probes = enable;
     }
 
+    /// Upstream's global `PathSimulator::sEnablePathsFromAllSourceProbes` (off by default): see
+    /// [`PathSimulationParams::paths_from_all_source_probes`].
+    pub fn set_enable_paths_from_all_source_probes(&mut self, enable: bool) {
+        self.enable_paths_from_all_source_probes = enable;
+    }
+
     pub fn shared_direct_inputs(&self) -> &SharedDirectSimulationInputs {
         &self.shared_direct
     }
@@ -285,17 +332,49 @@ impl SimulationManager {
         self.shared_reflection = inputs;
     }
 
+    pub fn shared_pathing_inputs(&self) -> &SharedPathingSimulationInputs {
+        &self.shared_pathing
+    }
+
+    pub fn set_shared_pathing_inputs(&mut self, inputs: SharedPathingSimulationInputs) {
+        self.shared_pathing = inputs;
+    }
+
     /// The committed probe batches, which baked sources are looked up in.
     pub fn probe_manager(&self) -> &ProbeManager {
         &self.probe_manager
     }
 
+    /// Adds a batch at the next commit. With pathing enabled, the batch gets a new path simulator for its probes as
+    /// they are now (replacing any it had).
     pub fn add_probe_batch(&mut self, batch: Arc<ProbeBatch>) {
+        if self.settings.enable_pathing {
+            let s = &self.settings;
+            let simulator = Arc::new(PathSimulator::new(
+                &batch,
+                s.num_vis_samples,
+                s.asymmetric_vis_range,
+                s.down,
+            ));
+            match self
+                .pending_path_simulators
+                .iter_mut()
+                .find(|(b, _)| Arc::ptr_eq(b, &batch))
+            {
+                Some(entry) => entry.1 = simulator,
+                None => self
+                    .pending_path_simulators
+                    .push((Arc::clone(&batch), simulator)),
+            }
+        }
+
         self.probe_manager.add_probe_batch(batch);
     }
 
     pub fn remove_probe_batch(&mut self, batch: &Arc<ProbeBatch>) {
         self.probe_manager.remove_probe_batch(batch);
+        self.pending_path_simulators
+            .retain(|(b, _)| !Arc::ptr_eq(b, batch));
     }
 
     /// The committed sources, in the order they were added.
@@ -319,6 +398,8 @@ impl SimulationManager {
     /// Applies the probe batches and sources added and removed since the last commit.
     pub fn commit(&mut self) {
         self.probe_manager.commit();
+        self.path_simulators
+            .clone_from(&self.pending_path_simulators);
         self.sources.clone_from(&self.pending_sources);
     }
 
@@ -413,6 +494,114 @@ impl SimulationManager {
         }
 
         self.partition_impulse_responses(&mut guards, num_channels, num_samples);
+    }
+
+    /// Simulates the paths of every committed source with pathing enabled (upstream `simulatePathing()`), from the
+    /// probes of its batch around it to those around the listener. The listener's probes are looked up again only
+    /// when a source uses another batch than the source before it.
+    ///
+    /// # Panics
+    ///
+    /// If there is no scene, a source with pathing enabled has no probe batch or one that was not added to the
+    /// manager with pathing enabled, a source's order exceeds the maximum order (or it was created without pathing),
+    /// a batch has not been committed, or a source is locked by the calling thread.
+    pub fn simulate_pathing(&mut self) {
+        let scene = self
+            .scene
+            .as_ref()
+            .expect("a scene to simulate paths in")
+            .ray_tracer();
+        let listener = self.shared_pathing.listener.origin;
+
+        let source_probes = &mut self.pathing_source_probes;
+        let listener_probes = &mut self.pathing_listener_probes;
+        source_probes.resize(ProbeNeighborhood::MAX_PROBES_PER_BATCH);
+        listener_probes.resize(ProbeNeighborhood::MAX_PROBES_PER_BATCH);
+
+        let mut prev_listener_batch: Option<*const ProbeBatch> = None;
+
+        for source in &self.sources {
+            let mut source = lock(source);
+            if !source.pathing_inputs.enabled {
+                continue;
+            }
+
+            let (batch, simulator) = path_simulator(&self.path_simulators, &source.pathing_inputs);
+            let origin = source.pathing_inputs.source.origin;
+
+            source_probes.reset();
+            find_probes(scene, batch, origin, source_probes);
+
+            if prev_listener_batch != Some(Arc::as_ptr(batch)) {
+                prev_listener_batch = Some(Arc::as_ptr(batch));
+
+                listener_probes.reset();
+                find_probes(scene, batch, listener, listener_probes);
+            }
+
+            simulate_source_pathing(
+                scene,
+                batch,
+                simulator,
+                source_probes,
+                listener_probes,
+                &self.shared_pathing,
+                self.enable_paths_from_all_source_probes,
+                &mut source,
+            );
+        }
+    }
+
+    /// Simulates the paths of one source, which need not be committed (upstream `simulatePathing(source)`).
+    ///
+    /// # Panics
+    ///
+    /// As [`simulate_pathing`](Self::simulate_pathing).
+    pub fn simulate_pathing_source(&mut self, source: &mut SimulationData) {
+        let source_probes = &mut self.pathing_source_probes;
+        let listener_probes = &mut self.pathing_listener_probes;
+        for probes in [&mut *source_probes, &mut *listener_probes] {
+            if probes.num_probes() != ProbeNeighborhood::MAX_PROBES_PER_BATCH {
+                probes.resize(ProbeNeighborhood::MAX_PROBES_PER_BATCH);
+            } else {
+                probes.reset();
+            }
+        }
+
+        if !source.pathing_inputs.enabled {
+            return;
+        }
+
+        let scene = self
+            .scene
+            .as_ref()
+            .expect("a scene to simulate paths in")
+            .ray_tracer();
+        let (batch, simulator) = path_simulator(&self.path_simulators, &source.pathing_inputs);
+
+        find_probes(
+            scene,
+            batch,
+            source.pathing_inputs.source.origin,
+            source_probes,
+        );
+        find_probes(
+            scene,
+            batch,
+            self.shared_pathing.listener.origin,
+            listener_probes,
+        );
+
+        simulate_source_pathing(
+            scene,
+            batch,
+            simulator,
+            source_probes,
+            listener_probes,
+            &self.shared_pathing,
+            self.enable_paths_from_all_source_probes,
+            source,
+        );
     }
 
     fn has_listener_changed(&self) -> bool {
@@ -754,6 +943,89 @@ impl SimulationManager {
             source.reflection_outputs.num_channels = num_channels;
             source.reflection_outputs.num_samples = num_samples;
         }
+    }
+}
+
+/// The batch of a source's pathing inputs and its path simulator.
+fn path_simulator<'a>(
+    simulators: &'a [(Arc<ProbeBatch>, Arc<PathSimulator>)],
+    inputs: &super::PathingSimulationInputs,
+) -> (&'a Arc<ProbeBatch>, &'a PathSimulator) {
+    let batch = inputs.probes.as_ref().expect("a probe batch for pathing");
+    let (batch, simulator) = simulators
+        .iter()
+        .find(|(b, _)| Arc::ptr_eq(b, batch))
+        .expect("the source's probe batch was added to a manager with pathing enabled");
+    (batch, simulator)
+}
+
+/// Fills `probes` (of [`MAX_PROBES_PER_BATCH`](ProbeNeighborhood::MAX_PROBES_PER_BATCH) entries) with the probes of
+/// `batch` around `point` that it sees, weighted. The entries refer to the batch as index 0.
+fn find_probes(
+    scene: &dyn RayTracer,
+    batch: &ProbeBatch,
+    point: Vector3,
+    probes: &mut ProbeNeighborhood,
+) {
+    batch.influencing_probes(point, probes, 0, 0);
+    probes.check_occlusion(scene, point, &[batch]);
+    probes.calc_weights(point, &[batch]);
+}
+
+/// Upstream's `findPaths` call and the copy of its results into the source's outputs.
+#[allow(clippy::too_many_arguments)]
+fn simulate_source_pathing(
+    scene: &dyn RayTracer,
+    batch: &ProbeBatch,
+    simulator: &PathSimulator,
+    source_probes: &ProbeNeighborhood,
+    listener_probes: &ProbeNeighborhood,
+    shared: &SharedPathingSimulationInputs,
+    paths_from_all_source_probes: bool,
+    source: &mut SimulationData,
+) {
+    let inputs = &source.pathing_inputs;
+    let params = PathSimulationParams {
+        source: inputs.source.origin,
+        listener: shared.listener.origin,
+        radius: inputs.vis_radius,
+        threshold: inputs.vis_threshold,
+        vis_range: inputs.vis_range,
+        order: inputs.order,
+        enable_validation: inputs.enable_validation,
+        find_alternate_paths: inputs.find_alternate_paths,
+        simplify_paths: inputs.simplify_paths,
+        real_time_vis: inputs.real_time_vis,
+        distance_attenuation_model: &inputs.distance_attenuation_model,
+        deviation_model: &inputs.deviation_model,
+        paths_from_all_source_probes,
+        force_direct_occlusion: false,
+    };
+
+    let mut callback = shared
+        .vis_callback
+        .as_ref()
+        .map(|callback| move |from, to, occluded| callback(from, to, occluded));
+
+    let outputs = &mut source.pathing_outputs;
+    let result = simulator.find_paths(
+        scene,
+        &[batch],
+        0,
+        source_probes,
+        listener_probes,
+        &params,
+        &mut outputs.sh,
+        callback
+            .as_mut()
+            .map(|c| c as &mut dyn FnMut(Vector3, Vector3, bool)),
+    );
+
+    if let Some(result) = result {
+        outputs.eq = result.eq_gains;
+        outputs.direction = result.direction;
+        outputs.distance_ratio = result.distance_ratio;
+        outputs.total_deviation = result.total_deviation;
     }
 }
 

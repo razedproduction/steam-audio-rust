@@ -1,14 +1,18 @@
 //! The inputs, outputs and state of one source in a [`SimulationManager`](super::SimulationManager) (upstream
-//! `simulation_data.{h,cpp}`, `SimulationData`). Pathing inputs and outputs follow in stage 7b.
+//! `simulation_data.{h,cpp}`, `SimulationData`).
+
+use std::sync::Arc;
 
 use crate::air_absorption::AirAbsorptionModel;
 use crate::baking::{BakedDataIdentifier, BakedDataType, BakedDataVariation};
 use crate::bands::NUM_BANDS;
+use crate::deviation::DeviationModel;
 use crate::directivity::Directivity;
 use crate::distance_attenuation::DistanceAttenuationModel;
 use crate::effects::OverlapSaveFir;
 use crate::geometry::Sphere;
 use crate::math::{CoordinateSpace3, Vector3};
+use crate::probes::ProbeBatch;
 use crate::sh;
 use crate::triple_buffer::{TripleBufferReader, TripleBufferWriter, triple_buffer};
 
@@ -105,6 +109,42 @@ pub(crate) struct ReflectionSimulationState {
     pub(crate) valid_simulation_data: bool,
 }
 
+/// Inputs of a source's pathing simulation (upstream `PathingSimulationInputs`). See
+/// [`PathSimulationParams`](crate::pathing::PathSimulationParams) for the parameters.
+#[derive(Debug, Clone)]
+pub struct PathingSimulationInputs {
+    pub enabled: bool,
+    pub source: CoordinateSpace3,
+    /// The batch whose baked paths are used. It must have been added to the manager.
+    pub probes: Option<Arc<ProbeBatch>>,
+    pub vis_radius: f32,
+    pub vis_threshold: f32,
+    pub vis_range: f32,
+    /// Ambisonics order of the SH coefficients, at most the manager's maximum order.
+    pub order: usize,
+    pub enable_validation: bool,
+    pub find_alternate_paths: bool,
+    pub simplify_paths: bool,
+    pub real_time_vis: bool,
+    pub distance_attenuation_model: DistanceAttenuationModel,
+    pub deviation_model: DeviationModel,
+}
+
+/// Results of a source's pathing simulation (upstream `PathingSimulationOutputs`, which upstream copies from
+/// `PathingSimulationState` after each simulation; here they are written directly). A simulation that finds neither a
+/// direct path nor probes around the source and listener leaves them as they are.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PathingSimulationOutputs {
+    /// 0.1 per band before the first simulation.
+    pub eq: [f32; NUM_BANDS],
+    /// SH coefficients of the manager's maximum order (empty without pathing). A simulation writes those of its
+    /// order; the rest keep earlier values.
+    pub sh: Vec<f32>,
+    pub direction: Vector3,
+    pub distance_ratio: f32,
+    pub total_deviation: f32,
+}
+
 /// A source: its simulation inputs, outputs and state (upstream `SimulationData`).
 ///
 /// A [`SimulationManager`](super::SimulationManager) simulates the sources added to it, reading `*_inputs` and
@@ -113,17 +153,19 @@ pub(crate) struct ReflectionSimulationState {
 pub struct SimulationData {
     pub direct_inputs: DirectSimulationInputs,
     pub reflection_inputs: ReflectionSimulationInputs,
+    pub pathing_inputs: PathingSimulationInputs,
     /// Upstream `directOutputs.directPath`.
     pub direct_path: DirectSoundPath,
     pub reflection_outputs: ReflectionSimulationOutputs,
+    pub pathing_outputs: PathingSimulationOutputs,
     /// `None` when the source was created without indirect simulation.
     pub(crate) reflection_state: Option<ReflectionSimulationState>,
 }
 
 impl SimulationData {
-    /// A source for a manager with `settings`, with reflections if `enable_indirect`. Its inputs start with nothing
-    /// to simulate: no direct flags, reflections disabled.
-    pub fn new(settings: &SimulationSettings, enable_indirect: bool) -> Self {
+    /// A source for a manager with `settings`, with reflections if `enable_indirect` and pathing if `enable_pathing`.
+    /// Its inputs start with nothing to simulate: no direct flags, reflections and pathing disabled.
+    pub fn new(settings: &SimulationSettings, enable_indirect: bool, enable_pathing: bool) -> Self {
         let direct_inputs = DirectSimulationInputs {
             flags: DirectSimulationFlags::NONE,
             source: CoordinateSpace3::default(),
@@ -227,11 +269,44 @@ impl SimulationData {
             state
         });
 
+        // Upstream leaves the inputs other than `enabled` uninitialized; these are the C API's choices for the
+        // search flags.
+        let pathing_inputs = PathingSimulationInputs {
+            enabled: false,
+            source: CoordinateSpace3::default(),
+            probes: None,
+            vis_radius: 0.0,
+            vis_threshold: 0.0,
+            vis_range: 0.0,
+            order: 0,
+            enable_validation: false,
+            find_alternate_paths: false,
+            simplify_paths: true,
+            real_time_vis: true,
+            distance_attenuation_model: DistanceAttenuationModel::default(),
+            deviation_model: DeviationModel::default(),
+        };
+
+        // Upstream leaves the direction, distance ratio and total deviation uninitialized.
+        let pathing_outputs = PathingSimulationOutputs {
+            eq: [0.1; NUM_BANDS],
+            sh: if enable_pathing {
+                vec![0.0; sh::num_coeffs_for_order(settings.max_order)]
+            } else {
+                Vec::new()
+            },
+            direction: Vector3::ZERO,
+            distance_ratio: 0.0,
+            total_deviation: 0.0,
+        };
+
         Self {
             direct_inputs,
             reflection_inputs,
+            pathing_inputs,
             direct_path,
             reflection_outputs,
+            pathing_outputs,
             reflection_state,
         }
     }
