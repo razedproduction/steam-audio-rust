@@ -6,6 +6,7 @@ A Rust reimplementation of Valve's Steam Audio, verified numerically against the
 
 - `core/`: **upstream C++, the specification. Never modify it.** (`core/deps*/` are gitignored build outputs.)
 - `crates/steam-audio/`: the port (library). `crates/parity/`: test support (`.npy`, `Tolerance`, `Lcg`).
+- `crates/phonon-capi/`: the C API of `phonon.h`, built as the `phonon` library; the only crate allowed `unsafe`.
 - `crates/sofa/`: SOFA/HDF5 reader, a port of the libmysofa subset Steam Audio uses (ADR 0001); fuzz target in
   `crates/sofa/fuzz` (nightly, outside the workspace).
 - `tools/golden/`: reference build + golden-data generators (C++). See `tools/golden/README.md`.
