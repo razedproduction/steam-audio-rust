@@ -1,0 +1,28 @@
+[package]
+name = "phonon-capi"
+description = "C API of the Steam Audio port: a drop-in replacement for upstream's phonon library (phonon.h)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+# The library upstream ships is `phonon` (phonon.dll, libphonon.so, libphonon.dylib). The rlib lets the tests call the
+# exported functions directly.
+name = "phonon"
+crate-type = ["cdylib", "rlib"]
+
+[lints]
+workspace = true
+
+[features]
+default = ["sofa"]
+# SOFA HRTFs (`IPL_HRTFTYPE_SOFA`); without it they fail to load, like upstream built with `IPL_DISABLE_SOFA`.
+sofa = ["steam-audio/sofa"]
+
+[dependencies]
+steam-audio = { path = "../steam-audio", default-features = false }
+
+[dev-dependencies]
+parity = { path = "../parity" }

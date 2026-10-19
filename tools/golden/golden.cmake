@@ -29,6 +29,7 @@ add_executable(golden
     ${GOLDEN_DIR}/src/simulation.cpp
     ${GOLDEN_DIR}/src/pathing.cpp
     ${GOLDEN_DIR}/src/path_simulation.cpp
+    ${GOLDEN_DIR}/src/capi.cpp
 )
 
 target_link_libraries(golden PRIVATE core hrtf)

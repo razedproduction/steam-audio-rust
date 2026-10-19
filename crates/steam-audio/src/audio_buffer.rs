@@ -304,40 +304,73 @@ pub fn convert_ambisonics(
     input: &AudioBuffer<impl AsRef<[f32]>>,
     out: &mut AudioBuffer<impl AsRef<[f32]> + AsMut<[f32]>>,
 ) {
-    use AmbisonicsType::{FuMa, N3d, Sn3d};
-
     assert_eq!(input.num_channels, out.num_channels, "channel count");
     assert_eq!(input.num_samples, out.num_samples, "sample count");
 
     let fuma_factor = fuma_for_sn3d_factor();
 
     for in_index in 0..input.num_channels {
-        let out_index = match (in_type, out_type) {
-            (N3d | Sn3d, FuMa) => FUMA_FOR_ACN_INDEX[in_index],
-            (FuMa, N3d | Sn3d) => ACN_FOR_FUMA_INDEX[in_index],
-            _ => in_index,
-        };
-
-        let acn_in_index = if in_type != FuMa {
-            in_index
-        } else {
-            ACN_FOR_FUMA_INDEX[in_index]
-        };
-        let l = (acn_in_index as f32).sqrt().floor() as i32;
-        let two_l_plus_one = 2.0 * l as f32 + 1.0;
-
-        let factor = match (in_type, out_type) {
-            (N3d, Sn3d) => 1.0 / two_l_plus_one.sqrt(),
-            (N3d, FuMa) => (1.0 / two_l_plus_one.sqrt()) * fuma_factor[out_index],
-            (Sn3d, N3d) => two_l_plus_one.sqrt(),
-            (Sn3d, FuMa) => fuma_factor[out_index],
-            (FuMa, Sn3d) => 1.0 / fuma_factor[in_index],
-            (FuMa, N3d) => two_l_plus_one.sqrt() * (1.0 / fuma_factor[in_index]),
-            _ => 1.0,
-        };
-
+        let (out_index, factor) = ambisonics_conversion(in_type, out_type, in_index, &fuma_factor);
         array_math::scale(input.channel(in_index), factor, out.channel_mut(out_index));
     }
+}
+
+/// [`convert_ambisonics`] with the same buffer as input and output, which `phonon.h` allows.
+///
+/// Channels are converted in input order, each read from the buffer as it is at that point, like upstream with
+/// `in == out`: when the conversion reorders channels (to or from FuMa), a channel may be read after an earlier one was
+/// written over it. Panics if a FuMa conversion has more than 16 channels.
+pub fn convert_ambisonics_in_place(
+    in_type: AmbisonicsType,
+    out_type: AmbisonicsType,
+    buffer: &mut AudioBuffer<impl AsRef<[f32]> + AsMut<[f32]>>,
+) {
+    let fuma_factor = fuma_for_sn3d_factor();
+    let (num_channels, n) = (buffer.num_channels, buffer.num_samples);
+    let data = buffer.as_mut_slice();
+
+    for in_index in 0..num_channels {
+        let (out_index, factor) = ambisonics_conversion(in_type, out_type, in_index, &fuma_factor);
+        for i in 0..n {
+            data[out_index * n + i] = data[in_index * n + i] * factor;
+        }
+    }
+}
+
+/// Output channel and gain for input channel `in_index` of an Ambisonics conversion.
+fn ambisonics_conversion(
+    in_type: AmbisonicsType,
+    out_type: AmbisonicsType,
+    in_index: usize,
+    fuma_factor: &[f32; 16],
+) -> (usize, f32) {
+    use AmbisonicsType::{FuMa, N3d, Sn3d};
+
+    let out_index = match (in_type, out_type) {
+        (N3d | Sn3d, FuMa) => FUMA_FOR_ACN_INDEX[in_index],
+        (FuMa, N3d | Sn3d) => ACN_FOR_FUMA_INDEX[in_index],
+        _ => in_index,
+    };
+
+    let acn_in_index = if in_type != FuMa {
+        in_index
+    } else {
+        ACN_FOR_FUMA_INDEX[in_index]
+    };
+    let l = (acn_in_index as f32).sqrt().floor() as i32;
+    let two_l_plus_one = 2.0 * l as f32 + 1.0;
+
+    let factor = match (in_type, out_type) {
+        (N3d, Sn3d) => 1.0 / two_l_plus_one.sqrt(),
+        (N3d, FuMa) => (1.0 / two_l_plus_one.sqrt()) * fuma_factor[out_index],
+        (Sn3d, N3d) => two_l_plus_one.sqrt(),
+        (Sn3d, FuMa) => fuma_factor[out_index],
+        (FuMa, Sn3d) => 1.0 / fuma_factor[in_index],
+        (FuMa, N3d) => two_l_plus_one.sqrt() * (1.0 / fuma_factor[in_index]),
+        _ => 1.0,
+    };
+
+    (out_index, factor)
 }
 
 #[cfg(test)]

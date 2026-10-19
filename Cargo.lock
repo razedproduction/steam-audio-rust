@@ -55,6 +55,14 @@ name = "parity"
 version = "0.1.0"
 
 [[package]]
+name = "phonon-capi"
+version = "0.1.0"
+dependencies = [
+ "parity",
+ "steam-audio",
+]
+
+[[package]]
 name = "primal-check"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
