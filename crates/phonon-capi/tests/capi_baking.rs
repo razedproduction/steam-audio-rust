@@ -1682,7 +1682,15 @@ fn baking_matches_upstream() {
         append_baked_data(&mut fields, &mut reverbs, context, batch, id);
     }
     check_signal("baked_fields", &fields);
-    check_f32("baked_reverbs", &reverbs, |_| Tolerance::F32);
+    // A reverb time comes from a line fitted to the log of the energies, down to the faint tail, so off Windows the
+    // ulp differences of libm's `powf` in the fields (8e-9 x peak) move it by up to 6.2e-4 relative (measured on
+    // Linux and macOS CI); on Windows it is bit-exact.
+    let reverb_tolerance = if cfg!(windows) {
+        Tolerance::F32
+    } else {
+        Tolerance::new(1e-6, 1e-3)
+    };
+    check_f32("baked_reverbs", &reverbs, |_| reverb_tolerance);
 
     let mut path_progress: Vec<f32> = Vec::new();
     let mut path_params = IPLPathBakeParams {
