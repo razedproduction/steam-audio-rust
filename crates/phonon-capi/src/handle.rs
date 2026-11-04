@@ -2,11 +2,11 @@
 //!
 //! A handle is a boxed [`Handle`] cast to the opaque pointer type of `phonon.h`. Like upstream, it counts the
 //! references the caller holds; the last `release` frees it. The object itself sits in an `Arc`, so that objects that
-//! use one another (the simulator and its sources, stage 8b) can share it past the caller's last reference. Every object
+//! use one another (static meshes and their scene; the simulator and its sources, stage 8c) can share it past the caller's last reference. Every object
 //! but the context also keeps its context alive, as upstream's handles hold a `shared_ptr<Context>`.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::context::Context;
 
@@ -82,10 +82,47 @@ impl<T> Handle<T> {
     }
 }
 
+/// The object behind a handle, or `None` for null.
+///
+/// # Safety
+///
+/// `ptr` is null or a live handle holding a `T`.
+pub(crate) unsafe fn object<'a, T, O>(ptr: *mut O) -> Option<&'a Arc<T>> {
+    // SAFETY: guaranteed by the caller.
+    unsafe { Handle::<T>::from_raw(ptr) }.map(Handle::get)
+}
+
 /// Locks an object, ignoring poisoning: a panic is caught at the API boundary ([`crate::guard`]), and the object is
 /// left as upstream would leave it after an exception (in whatever state it reached).
 pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Locks an object for reading, ignoring poisoning (see [`lock`]).
+pub(crate) fn read<T>(lock: &RwLock<T>) -> RwLockReadGuard<'_, T> {
+    lock.read().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Locks an object for writing, ignoring poisoning (see [`lock`]).
+pub(crate) fn write<T>(lock: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
+    lock.write().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Locks two objects, in address order so that two threads locking the same pair cannot deadlock. `None` for the
+/// second guard when both are the same object (the first guard then stands for both).
+pub(crate) fn lock_pair<'a, T>(
+    a: &'a Mutex<T>,
+    b: &'a Mutex<T>,
+) -> (MutexGuard<'a, T>, Option<MutexGuard<'a, T>>) {
+    if std::ptr::eq(a, b) {
+        (lock(a), None)
+    } else if (a as *const Mutex<T>) < (b as *const Mutex<T>) {
+        let first = lock(a);
+        (first, Some(lock(b)))
+    } else {
+        let second = lock(b);
+        (lock(a), Some(second))
+    }
 }
 
 /// Defines `ipl<Name>Retain` and `ipl<Name>Release` for a handle type holding `$inner`.
