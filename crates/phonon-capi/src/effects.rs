@@ -20,7 +20,7 @@ use steam_audio::speaker_layout::{SpeakerLayout, SpeakerLayoutType};
 
 use crate::buffer::{RawBuffer, with_input_output, with_output};
 use crate::context::{Context, context_arc};
-use crate::handle::{Handle, lock, retain_release};
+use crate::handle::{Handle, lock};
 use crate::hrtf::hrtf_ref;
 use crate::types::*;
 use crate::{from_ipl_coordinate_space, from_ipl_vector, guard};
@@ -30,7 +30,7 @@ use crate::{from_ipl_coordinate_space, from_ipl_vector, guard};
 // --------------------------------------------------------------------------------------------------------------------
 
 /// What every effect handle supports besides creation and `apply`.
-trait ApiEffect {
+pub(crate) trait ApiEffect {
     fn reset(&mut self);
     fn tail_size(&self) -> usize;
     /// Whether [`tail`](Self::tail) can write `out`.
@@ -38,7 +38,7 @@ trait ApiEffect {
     fn tail(&mut self, out: &mut AudioBufferMut<'_>) -> AudioEffectState;
 }
 
-fn effect_state(state: AudioEffectState) -> IPLAudioEffectState {
+pub(crate) fn effect_state(state: AudioEffectState) -> IPLAudioEffectState {
     match state {
         AudioEffectState::TailRemaining => IPL_AUDIOEFFECTSTATE_TAILREMAINING,
         AudioEffectState::TailComplete => IPL_AUDIOEFFECTSTATE_TAILCOMPLETE,
@@ -46,12 +46,12 @@ fn effect_state(state: AudioEffectState) -> IPLAudioEffectState {
 }
 
 /// Whether `buffer` has `channels` channels of `samples` samples.
-fn has_shape(buffer: &RawBuffer, channels: usize, samples: usize) -> bool {
+pub(crate) fn has_shape(buffer: &RawBuffer, channels: usize, samples: usize) -> bool {
     buffer.num_channels() == channels && buffer.num_samples() == samples
 }
 
 /// An Ambisonics order from the API (negative orders are invalid).
-fn order(value: IPLint32) -> Option<usize> {
+pub(crate) fn order(value: IPLint32) -> Option<usize> {
     usize::try_from(value).ok()
 }
 
@@ -60,7 +60,7 @@ fn order(value: IPLint32) -> Option<usize> {
 /// # Safety
 ///
 /// For a custom layout, `speakers` is null or valid for reads of `numSpeakers` vectors.
-unsafe fn speaker_layout(layout: &IPLSpeakerLayout) -> Option<SpeakerLayout> {
+pub(crate) unsafe fn speaker_layout(layout: &IPLSpeakerLayout) -> Option<SpeakerLayout> {
     let ty = match layout.r#type {
         IPL_SPEAKERLAYOUTTYPE_MONO => SpeakerLayoutType::Mono,
         IPL_SPEAKERLAYOUTTYPE_STEREO => SpeakerLayoutType::Stereo,
@@ -91,7 +91,7 @@ unsafe fn speaker_layout(layout: &IPLSpeakerLayout) -> Option<SpeakerLayout> {
 /// # Safety
 ///
 /// `context` is null or a live context, and the other pointers are null or valid.
-unsafe fn create<O, S, T>(
+pub(crate) unsafe fn create<O, S, T>(
     context: IPLContext,
     audio_settings: *mut IPLAudioSettings,
     effect_settings: *mut S,
@@ -131,7 +131,9 @@ unsafe fn create<O, S, T>(
 /// # Safety
 ///
 /// `effect` is null or a live effect holding a `Mutex<T>`.
-unsafe fn effect_ref<'a, O, T>(effect: *mut O) -> Option<(&'a Mutex<T>, &'a Arc<Context>)> {
+pub(crate) unsafe fn effect_ref<'a, O, T>(
+    effect: *mut O,
+) -> Option<(&'a Mutex<T>, &'a Arc<Context>)> {
     // SAFETY: guaranteed by the caller.
     let handle = unsafe { Handle::<Mutex<T>>::from_raw(effect) }?;
     Some((&**handle.get(), handle.context()?))
@@ -143,7 +145,7 @@ unsafe fn effect_ref<'a, O, T>(effect: *mut O) -> Option<(&'a Mutex<T>, &'a Arc<
 /// # Safety
 ///
 /// `effect` is null or a live effect holding a `Mutex<T>`, and the other pointers are null or valid.
-unsafe fn apply<O, T, P>(
+pub(crate) unsafe fn apply<O, T, P>(
     effect: *mut O,
     params: *mut P,
     input: *mut IPLAudioBuffer,
@@ -173,7 +175,7 @@ unsafe fn apply<O, T, P>(
 /// # Safety
 ///
 /// `effect` is null or a live effect holding a `Mutex<T>`.
-unsafe fn reset<O, T: ApiEffect>(effect: *mut O) {
+pub(crate) unsafe fn reset<O, T: ApiEffect>(effect: *mut O) {
     guard((), || {
         // SAFETY: guaranteed by the caller.
         if let Some((effect, _)) = unsafe { effect_ref::<O, T>(effect) } {
@@ -187,7 +189,7 @@ unsafe fn reset<O, T: ApiEffect>(effect: *mut O) {
 /// # Safety
 ///
 /// `effect` is null or a live effect holding a `Mutex<T>`.
-unsafe fn tail_size<O, T: ApiEffect>(effect: *mut O) -> IPLint32 {
+pub(crate) unsafe fn tail_size<O, T: ApiEffect>(effect: *mut O) -> IPLint32 {
     guard(0, || {
         // SAFETY: guaranteed by the caller.
         unsafe { effect_ref::<O, T>(effect) }.map_or(0, |(effect, _)| {
@@ -201,7 +203,7 @@ unsafe fn tail_size<O, T: ApiEffect>(effect: *mut O) -> IPLint32 {
 /// # Safety
 ///
 /// `effect` is null or a live effect holding a `Mutex<T>`, and `output` is null or a valid buffer.
-unsafe fn tail<O, T: ApiEffect>(
+pub(crate) unsafe fn tail<O, T: ApiEffect>(
     effect: *mut O,
     output: *mut IPLAudioBuffer,
 ) -> IPLAudioEffectState {
@@ -224,7 +226,7 @@ unsafe fn tail<O, T: ApiEffect>(
 /// Defines the retain, release, reset, tail size and tail functions of an effect.
 macro_rules! effect_functions {
     ($handle:ty, $inner:ty, $retain:ident, $release:ident, $reset:ident, $tail_size:ident, $tail:ident) => {
-        retain_release!($handle, Mutex<$inner>, $retain, $release);
+        $crate::handle::retain_release!($handle, std::sync::Mutex<$inner>, $retain, $release);
 
         /// Resets the effect's internal state.
         ///
@@ -234,7 +236,7 @@ macro_rules! effect_functions {
         #[unsafe(no_mangle)]
         pub unsafe extern "system" fn $reset(effect: $handle) {
             // SAFETY: guaranteed by the caller.
-            unsafe { reset::<_, $inner>(effect) }
+            unsafe { $crate::effects::reset::<_, $inner>(effect) }
         }
 
         /// Number of tail samples left in the effect (0 for a null handle).
@@ -245,7 +247,7 @@ macro_rules! effect_functions {
         #[unsafe(no_mangle)]
         pub unsafe extern "system" fn $tail_size(effect: $handle) -> IPLint32 {
             // SAFETY: guaranteed by the caller.
-            unsafe { tail_size::<_, $inner>(effect) }
+            unsafe { $crate::effects::tail_size::<_, $inner>(effect) }
         }
 
         /// Writes the next frame of the effect's tail.
@@ -259,10 +261,12 @@ macro_rules! effect_functions {
             out: *mut IPLAudioBuffer,
         ) -> IPLAudioEffectState {
             // SAFETY: guaranteed by the caller.
-            unsafe { tail::<_, $inner>(effect, out) }
+            unsafe { $crate::effects::tail::<_, $inner>(effect, out) }
         }
     };
 }
+
+pub(crate) use effect_functions;
 
 // --------------------------------------------------------------------------------------------------------------------
 // Panning

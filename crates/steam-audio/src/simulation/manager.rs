@@ -2,7 +2,7 @@
 //! `SimulationManager`): direct sound, reflections simulated in real time or looked up from baked probes, turned into
 //! impulse responses, parametric reverb or both, and paths around obstacles through baked probe paths.
 
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock, RwLockReadGuard};
 
 use crate::baking::{BakedDataType, BakedDataVariation};
 use crate::bands::NUM_BANDS;
@@ -37,24 +37,74 @@ pub enum SceneType {
     Custom,
 }
 
-/// The scene a [`SimulationManager`] simulates in, of its [`SceneType`].
+/// The scene a [`SimulationManager`] simulates in.
+///
+/// Any scene works with a manager of either [`SceneType`], as upstream's: the manager's type decides how reflections
+/// are traced and whether energy fields may accumulate. A user's ray tracer has version 0 (upstream's `CustomScene`),
+/// so with a [`SceneType::Default`] manager it never counts as changed.
 pub enum SimulationScene {
     Default(Scene),
     Custom(Box<dyn RayTracer>),
+    /// A [`Scene`] shared with the code that changes it (upstream's scenes are reference-counted). It is locked for
+    /// reading during each simulation, so changes wait until the simulation returns.
+    Shared(Arc<RwLock<Scene>>),
+}
+
+/// A scene's ray tracer, borrowed for a simulation ([`SimulationScene::ray_tracer`]).
+pub enum SceneRef<'a> {
+    Borrowed(&'a dyn RayTracer),
+    Locked(RwLockReadGuard<'a, Scene>),
+}
+
+impl std::fmt::Debug for SceneRef<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Borrowed(_) => f.debug_tuple("Borrowed").finish_non_exhaustive(),
+            Self::Locked(scene) => f.debug_tuple("Locked").field(&**scene).finish(),
+        }
+    }
+}
+
+impl<'a> std::ops::Deref for SceneRef<'a> {
+    type Target = dyn RayTracer + 'a;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Borrowed(ray_tracer) => *ray_tracer,
+            Self::Locked(scene) => &**scene,
+        }
+    }
 }
 
 impl SimulationScene {
+    /// The type of the scene itself ([`SceneType::Default`] for a shared scene).
     pub fn scene_type(&self) -> SceneType {
         match self {
-            Self::Default(_) => SceneType::Default,
+            Self::Default(_) | Self::Shared(_) => SceneType::Default,
             Self::Custom(_) => SceneType::Custom,
         }
     }
 
-    pub fn ray_tracer(&self) -> &dyn RayTracer {
+    /// The scene's ray tracer; a shared scene stays locked for reading until it is dropped.
+    pub fn ray_tracer(&self) -> SceneRef<'_> {
         match self {
-            Self::Default(scene) => scene,
-            Self::Custom(ray_tracer) => ray_tracer.as_ref(),
+            Self::Default(scene) => SceneRef::Borrowed(scene),
+            Self::Custom(ray_tracer) => SceneRef::Borrowed(ray_tracer.as_ref()),
+            Self::Shared(scene) => {
+                SceneRef::Locked(scene.read().unwrap_or_else(PoisonError::into_inner))
+            }
+        }
+    }
+
+    /// The change version (upstream `IScene::version`): 0 for a user's ray tracer.
+    pub fn version(&self) -> u32 {
+        match self {
+            Self::Default(scene) => scene.version(),
+            Self::Custom(_) => 0,
+            Self::Shared(scene) => scene
+                .read()
+                .unwrap_or_else(PoisonError::into_inner)
+                .version(),
         }
     }
 }
@@ -64,6 +114,7 @@ impl std::fmt::Debug for SimulationScene {
         match self {
             Self::Default(scene) => f.debug_tuple("Default").field(scene).finish(),
             Self::Custom(_) => f.debug_tuple("Custom").finish_non_exhaustive(),
+            Self::Shared(scene) => f.debug_tuple("Shared").field(scene).finish(),
         }
     }
 }
@@ -288,19 +339,8 @@ impl SimulationManager {
         self.scene.as_mut()
     }
 
-    /// Sets the scene to simulate in (upstream `scene() = ...`).
-    ///
-    /// # Panics
-    ///
-    /// If the scene is not of the manager's [`SceneType`].
+    /// Sets the scene to simulate in (upstream `scene() = ...`), of either type (see [`SimulationScene`]).
     pub fn set_scene(&mut self, scene: Option<SimulationScene>) {
-        if let Some(scene) = &scene {
-            assert_eq!(
-                scene.scene_type(),
-                self.settings.scene_type,
-                "scene of another type than the manager's"
-            );
-        }
         self.scene = scene;
     }
 
@@ -426,8 +466,9 @@ impl SimulationManager {
             .as_ref()
             .expect("direct simulation is enabled");
         let inputs = &source.direct_inputs;
+        let scene = self.scene.as_ref().map(SimulationScene::ray_tracer);
         source.direct_path = simulator.simulate(
-            self.scene.as_ref().map(SimulationScene::ray_tracer),
+            scene.as_deref(),
             &DirectSimulationParams {
                 flags: inputs.flags,
                 source: inputs.source,
@@ -498,19 +539,21 @@ impl SimulationManager {
 
     /// Simulates the paths of every committed source with pathing enabled (upstream `simulatePathing()`), from the
     /// probes of its batch around it to those around the listener. The listener's probes are looked up again only
-    /// when a source uses another batch than the source before it.
+    /// when a source uses another batch than the source before it. Sources without a probe batch, or with one that
+    /// was not added to the manager (committed, with pathing enabled), are skipped (upstream dereferences a null
+    /// path simulator).
     ///
     /// # Panics
     ///
-    /// If there is no scene, a source with pathing enabled has no probe batch or one that was not added to the
-    /// manager with pathing enabled, a source's order exceeds the maximum order (or it was created without pathing),
-    /// a batch has not been committed, or a source is locked by the calling thread.
+    /// If there is no scene, a source's order exceeds the maximum order (or it was created without pathing), a batch
+    /// has not been committed, or a source is locked by the calling thread.
     pub fn simulate_pathing(&mut self) {
         let scene = self
             .scene
             .as_ref()
             .expect("a scene to simulate paths in")
             .ray_tracer();
+        let scene = &*scene;
         let listener = self.shared_pathing.listener.origin;
 
         let source_probes = &mut self.pathing_source_probes;
@@ -526,7 +569,11 @@ impl SimulationManager {
                 continue;
             }
 
-            let (batch, simulator) = path_simulator(&self.path_simulators, &source.pathing_inputs);
+            let Some((batch, simulator)) =
+                path_simulator(&self.path_simulators, &source.pathing_inputs)
+            else {
+                continue;
+            };
             let origin = source.pathing_inputs.source.origin;
 
             source_probes.reset();
@@ -577,7 +624,12 @@ impl SimulationManager {
             .as_ref()
             .expect("a scene to simulate paths in")
             .ray_tracer();
-        let (batch, simulator) = path_simulator(&self.path_simulators, &source.pathing_inputs);
+        let scene = &*scene;
+        let Some((batch, simulator)) =
+            path_simulator(&self.path_simulators, &source.pathing_inputs)
+        else {
+            return;
+        };
 
         find_probes(
             scene,
@@ -608,17 +660,19 @@ impl SimulationManager {
         (self.shared_reflection.listener.origin - self.prev_listener.origin).length() > 1e-4
     }
 
-    /// Whether the scene changed since real-time reflections were last simulated. A custom scene always counts as
-    /// changed (upstream cannot ask a user's ray tracer).
+    /// Whether the scene changed since real-time reflections were last simulated. With a [`SceneType::Custom`]
+    /// manager it always counts as changed (upstream cannot ask a user's ray tracer).
     fn has_scene_changed(&self) -> bool {
-        match self.scene.as_ref() {
-            Some(SimulationScene::Default(scene)) => scene.version() != self.scene_version,
-            _ => true,
+        if self.settings.scene_type == SceneType::Custom {
+            return true;
         }
+        self.scene
+            .as_ref()
+            .is_none_or(|scene| scene.version() != self.scene_version)
     }
 
     fn reset_scene_changed(&mut self) {
-        if let Some(SimulationScene::Default(scene)) = self.scene.as_ref() {
+        if let Some(scene) = self.scene.as_ref() {
             self.scene_version = scene.version();
         }
     }
@@ -677,7 +731,7 @@ impl SimulationManager {
             .as_mut()
             .expect("indirect simulation is enabled")
             .simulate(
-                scene,
+                &*scene,
                 &ReflectionSimulationParams {
                     sources: &self.real_time_sources,
                     directivities: &self.real_time_directivities,
@@ -694,6 +748,8 @@ impl SimulationManager {
                     .expect("indirect simulation is enabled"),
             );
         drop(fields);
+        // Before `accumulate_energy_fields` reads the version, which locks a shared scene again.
+        drop(scene);
 
         self.accumulate_energy_fields(sources);
     }
@@ -732,6 +788,7 @@ impl SimulationManager {
             .as_ref()
             .expect("a scene to simulate reflections in")
             .ray_tracer();
+        let scene = &*scene;
         let listener = self.shared_reflection.listener.origin;
 
         self.probe_manager
@@ -947,16 +1004,14 @@ impl SimulationManager {
 }
 
 /// The batch of a source's pathing inputs and its path simulator.
+/// The source's batch and its path simulator, if the batch was added to a manager with pathing enabled.
 fn path_simulator<'a>(
     simulators: &'a [(Arc<ProbeBatch>, Arc<PathSimulator>)],
     inputs: &super::PathingSimulationInputs,
-) -> (&'a Arc<ProbeBatch>, &'a PathSimulator) {
-    let batch = inputs.probes.as_ref().expect("a probe batch for pathing");
-    let (batch, simulator) = simulators
-        .iter()
-        .find(|(b, _)| Arc::ptr_eq(b, batch))
-        .expect("the source's probe batch was added to a manager with pathing enabled");
-    (batch, simulator)
+) -> Option<(&'a Arc<ProbeBatch>, &'a PathSimulator)> {
+    let batch = inputs.probes.as_ref()?;
+    let (batch, simulator) = simulators.iter().find(|(b, _)| Arc::ptr_eq(b, batch))?;
+    Some((batch, simulator))
 }
 
 /// Fills `probes` (of [`MAX_PROBES_PER_BATCH`](ProbeNeighborhood::MAX_PROBES_PER_BATCH) entries) with the probes of

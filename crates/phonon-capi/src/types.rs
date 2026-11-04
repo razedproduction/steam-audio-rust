@@ -650,6 +650,214 @@ pub struct IPLPathBakeParams {
 }
 
 // --------------------------------------------------------------------------------------------------------------------
+// Reflection and path effects
+// --------------------------------------------------------------------------------------------------------------------
+
+pub type IPLReflectionEffectType = i32;
+pub const IPL_REFLECTIONEFFECTTYPE_CONVOLUTION: IPLReflectionEffectType = 0;
+pub const IPL_REFLECTIONEFFECTTYPE_PARAMETRIC: IPLReflectionEffectType = 1;
+pub const IPL_REFLECTIONEFFECTTYPE_HYBRID: IPLReflectionEffectType = 2;
+pub const IPL_REFLECTIONEFFECTTYPE_TAN: IPLReflectionEffectType = 3;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct IPLReflectionEffectSettings {
+    pub r#type: IPLReflectionEffectType,
+    pub irSize: IPLint32,
+    pub numChannels: IPLint32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct IPLReflectionEffectParams {
+    pub r#type: IPLReflectionEffectType,
+    pub ir: IPLReflectionEffectIR,
+    pub reverbTimes: [IPLfloat32; IPL_NUM_BANDS],
+    pub eq: [IPLfloat32; IPL_NUM_BANDS],
+    pub delay: IPLint32,
+    pub numChannels: IPLint32,
+    pub irSize: IPLint32,
+    pub tanDevice: IPLTrueAudioNextDevice,
+    pub tanSlot: IPLint32,
+}
+
+impl Default for IPLReflectionEffectParams {
+    fn default() -> Self {
+        Self {
+            r#type: IPL_REFLECTIONEFFECTTYPE_CONVOLUTION,
+            ir: std::ptr::null_mut(),
+            reverbTimes: [0.0; IPL_NUM_BANDS],
+            eq: [0.0; IPL_NUM_BANDS],
+            delay: 0,
+            numChannels: 0,
+            irSize: 0,
+            tanDevice: std::ptr::null_mut(),
+            tanSlot: 0,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct IPLPathEffectSettings {
+    pub maxOrder: IPLint32,
+    pub spatialize: IPLbool,
+    pub speakerLayout: IPLSpeakerLayout,
+    pub hrtf: IPLHRTF,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct IPLPathEffectParams {
+    pub eqCoeffs: [IPLfloat32; IPL_NUM_BANDS],
+    /// `(order + 1)²` coefficients.
+    pub shCoeffs: *mut IPLfloat32,
+    pub order: IPLint32,
+    pub binaural: IPLbool,
+    pub hrtf: IPLHRTF,
+    pub listener: IPLCoordinateSpace3,
+    pub normalizeEQ: IPLbool,
+}
+
+impl Default for IPLPathEffectParams {
+    fn default() -> Self {
+        Self {
+            eqCoeffs: [0.0; IPL_NUM_BANDS],
+            shCoeffs: std::ptr::null_mut(),
+            order: 0,
+            binaural: IPL_FALSE,
+            hrtf: std::ptr::null_mut(),
+            listener: IPLCoordinateSpace3::default(),
+            normalizeEQ: IPL_FALSE,
+        }
+    }
+}
+
+// --------------------------------------------------------------------------------------------------------------------
+// Simulation
+// --------------------------------------------------------------------------------------------------------------------
+
+pub type IPLSimulationFlags = i32;
+pub const IPL_SIMULATIONFLAGS_DIRECT: IPLSimulationFlags = 1 << 0;
+pub const IPL_SIMULATIONFLAGS_REFLECTIONS: IPLSimulationFlags = 1 << 1;
+pub const IPL_SIMULATIONFLAGS_PATHING: IPLSimulationFlags = 1 << 2;
+
+pub type IPLDirectSimulationFlags = i32;
+pub const IPL_DIRECTSIMULATIONFLAGS_DISTANCEATTENUATION: IPLDirectSimulationFlags = 1 << 0;
+pub const IPL_DIRECTSIMULATIONFLAGS_AIRABSORPTION: IPLDirectSimulationFlags = 1 << 1;
+pub const IPL_DIRECTSIMULATIONFLAGS_DIRECTIVITY: IPLDirectSimulationFlags = 1 << 2;
+pub const IPL_DIRECTSIMULATIONFLAGS_OCCLUSION: IPLDirectSimulationFlags = 1 << 3;
+pub const IPL_DIRECTSIMULATIONFLAGS_TRANSMISSION: IPLDirectSimulationFlags = 1 << 4;
+
+pub type IPLDeviationModelType = i32;
+pub const IPL_DEVIATIONTYPE_DEFAULT: IPLDeviationModelType = 0;
+pub const IPL_DEVIATIONTYPE_CALLBACK: IPLDeviationModelType = 1;
+
+pub type IPLOcclusionType = i32;
+pub const IPL_OCCLUSIONTYPE_RAYCAST: IPLOcclusionType = 0;
+pub const IPL_OCCLUSIONTYPE_VOLUMETRIC: IPLOcclusionType = 1;
+
+pub type IPLDeviationCallback = Option<
+    unsafe extern "system" fn(angle: IPLfloat32, band: IPLint32, user_data: *mut c_void) -> f32,
+>;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct IPLDeviationModel {
+    pub r#type: IPLDeviationModelType,
+    pub callback: IPLDeviationCallback,
+    pub userData: *mut c_void,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct IPLSimulationSettings {
+    pub flags: IPLSimulationFlags,
+    pub sceneType: IPLSceneType,
+    pub reflectionType: IPLReflectionEffectType,
+    pub maxNumOcclusionSamples: IPLint32,
+    pub maxNumRays: IPLint32,
+    pub numDiffuseSamples: IPLint32,
+    pub maxDuration: IPLfloat32,
+    pub maxOrder: IPLint32,
+    pub maxNumSources: IPLint32,
+    pub numThreads: IPLint32,
+    pub rayBatchSize: IPLint32,
+    pub numVisSamples: IPLint32,
+    pub samplingRate: IPLint32,
+    pub frameSize: IPLint32,
+    pub openCLDevice: IPLOpenCLDevice,
+    pub radeonRaysDevice: IPLRadeonRaysDevice,
+    pub tanDevice: IPLTrueAudioNextDevice,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct IPLSourceSettings {
+    pub flags: IPLSimulationFlags,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct IPLSimulationInputs {
+    pub flags: IPLSimulationFlags,
+    pub directFlags: IPLDirectSimulationFlags,
+    pub source: IPLCoordinateSpace3,
+    pub distanceAttenuationModel: IPLDistanceAttenuationModel,
+    pub airAbsorptionModel: IPLAirAbsorptionModel,
+    pub directivity: IPLDirectivity,
+    pub occlusionType: IPLOcclusionType,
+    pub occlusionRadius: IPLfloat32,
+    pub numOcclusionSamples: IPLint32,
+    pub reverbScale: [IPLfloat32; IPL_NUM_BANDS],
+    pub hybridReverbTransitionTime: IPLfloat32,
+    pub hybridReverbOverlapPercent: IPLfloat32,
+    pub baked: IPLbool,
+    pub bakedDataIdentifier: IPLBakedDataIdentifier,
+    pub pathingProbes: IPLProbeBatch,
+    pub visRadius: IPLfloat32,
+    pub visThreshold: IPLfloat32,
+    pub visRange: IPLfloat32,
+    pub pathingOrder: IPLint32,
+    pub enableValidation: IPLbool,
+    pub findAlternatePaths: IPLbool,
+    pub numTransmissionRays: IPLint32,
+    /// Read for callers of API version 4.7 or later; may be null.
+    pub deviationModel: *mut IPLDeviationModel,
+}
+
+pub type IPLPathingVisualizationCallback = Option<
+    unsafe extern "system" fn(
+        from: IPLVector3,
+        to: IPLVector3,
+        occluded: IPLbool,
+        user_data: *mut c_void,
+    ),
+>;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct IPLSimulationSharedInputs {
+    pub listener: IPLCoordinateSpace3,
+    pub numRays: IPLint32,
+    pub numBounces: IPLint32,
+    pub duration: IPLfloat32,
+    pub order: IPLint32,
+    pub irradianceMinDistance: IPLfloat32,
+    /// Read for callers of API version 4.3 or later.
+    pub pathingVisCallback: IPLPathingVisualizationCallback,
+    pub pathingUserData: *mut c_void,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct IPLSimulationOutputs {
+    pub direct: IPLDirectEffectParams,
+    pub reflections: IPLReflectionEffectParams,
+    pub pathing: IPLPathEffectParams,
+}
+
+// --------------------------------------------------------------------------------------------------------------------
 // Opaque handles
 // --------------------------------------------------------------------------------------------------------------------
 
@@ -691,4 +899,11 @@ opaque_handles! {
     IPLReconstructor => _IPLReconstructor_t;
     IPLProbeArray => _IPLProbeArray_t;
     IPLProbeBatch => _IPLProbeBatch_t;
+    IPLTrueAudioNextDevice => _IPLTrueAudioNextDevice_t;
+    IPLReflectionEffectIR => _IPLReflectionEffectIR_t;
+    IPLReflectionEffect => _IPLReflectionEffect_t;
+    IPLReflectionMixer => _IPLReflectionMixer_t;
+    IPLPathEffect => _IPLPathEffect_t;
+    IPLSource => _IPLSource_t;
+    IPLSimulator => _IPLSimulator_t;
 }

@@ -249,6 +249,22 @@ pub(crate) unsafe fn with_input_output<R>(
     })
 }
 
+/// Runs `f` with a view of `input`.
+///
+/// # Safety
+///
+/// Every channel of `input` is valid for reads, and nothing writes them during the call.
+pub(crate) unsafe fn with_input<R>(
+    input: &RawBuffer,
+    f: impl FnOnce(&AudioBufferRef<'_>) -> R,
+) -> R {
+    with_scratch(|scratch| {
+        // SAFETY: guaranteed by the caller; nothing is written during the call.
+        let input = unsafe { input_view(input, input.is_contiguous(), &mut scratch.input) };
+        f(&input)
+    })
+}
+
 /// Runs `f` with a writable view of `output`.
 ///
 /// # Safety
