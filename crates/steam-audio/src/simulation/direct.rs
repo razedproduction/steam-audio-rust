@@ -82,6 +82,9 @@ pub enum OcclusionType {
     Raycast,
     /// The fraction of points inside the source's sphere that the listener can see.
     Volumetric,
+    /// Any other value of upstream's enum (which its C API casts from the caller's integer): occlusion is 0 whenever it
+    /// is computed (with a scene), as upstream's `switch` default gives.
+    Unknown,
 }
 
 /// Inputs of [`DirectSimulator::simulate`] (the arguments of upstream `simulate`).
@@ -174,6 +177,7 @@ impl DirectSimulator {
                         params.occlusion_radius,
                         params.num_occlusion_samples,
                     ),
+                    OcclusionType::Unknown => 0.0,
                 }
             }
             _ => 1.0,
