@@ -30,6 +30,7 @@ add_executable(golden
     ${GOLDEN_DIR}/src/pathing.cpp
     ${GOLDEN_DIR}/src/path_simulation.cpp
     ${GOLDEN_DIR}/src/capi.cpp
+    ${GOLDEN_DIR}/src/capi_baking.cpp
 )
 
 target_link_libraries(golden PRIVATE core hrtf)

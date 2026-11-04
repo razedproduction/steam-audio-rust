@@ -352,6 +352,24 @@ impl Scene {
         }
     }
 
+    /// Gives up the mesh's id without removing it (upstream: dropping the caller's reference while the scene's lists
+    /// still hold the mesh). A mesh that is added stays in the scene for good (nothing can remove it any more); one that
+    /// is not, or whose removal is staged, is freed once neither the pending nor the committed contents hold it.
+    pub fn forget_static_mesh(&mut self, id: StaticMeshId) {
+        if self.static_meshes.get(id.0).is_some() {
+            self.static_meshes.release(id.0);
+            self.collect();
+        }
+    }
+
+    /// Like [`forget_static_mesh`](Scene::forget_static_mesh), for an instanced mesh.
+    pub fn forget_instanced_mesh(&mut self, id: InstancedMeshId) {
+        if self.instanced_meshes.get(id.0).is_some() {
+            self.instanced_meshes.release(id.0);
+            self.collect();
+        }
+    }
+
     /// Changes the instance's transform (upstream `IInstancedMesh::updateTransform`). It takes effect
     /// immediately, as upstream's does; a changed transform bumps the version at the next commit.
     ///
@@ -610,5 +628,69 @@ impl RayTracer for Scene {
             || self
                 .committed_instanced_meshes()
                 .any(|mesh| mesh.any_hit(ray, min_distance, max_distance))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn triangle_mesh() -> StaticMesh {
+        let vertices = [
+            Vector3::new(-1.0, 0.0, -1.0),
+            Vector3::new(1.0, 0.0, -1.0),
+            Vector3::new(0.0, 0.0, 1.0),
+        ];
+        StaticMesh::new(
+            &vertices,
+            &[Triangle::new(0, 1, 2)],
+            &[0],
+            &[Material::default()],
+        )
+    }
+
+    fn hits_floor(scene: &Scene) -> bool {
+        scene.any_hit(
+            &Ray::new(Vector3::new(0.0, 1.0, 0.0), Vector3::new(0.0, -1.0, 0.0)),
+            0.0,
+            2.0,
+        )
+    }
+
+    #[test]
+    fn a_forgotten_mesh_stays_while_added() {
+        let mut scene = Scene::new();
+        let id = scene.insert_static_mesh(triangle_mesh());
+        scene.add_static_mesh(id);
+        scene.commit();
+        scene.forget_static_mesh(id);
+        assert!(scene.static_mesh(id).is_none());
+        scene.commit();
+        assert_eq!(scene.num_static_meshes(), 1);
+        assert!(hits_floor(&scene));
+        assert_eq!(scene.serialize(), {
+            let mut other = Scene::new();
+            let id = other.insert_static_mesh(triangle_mesh());
+            other.add_static_mesh(id);
+            other.commit();
+            other.serialize()
+        });
+    }
+
+    #[test]
+    fn a_forgotten_removed_mesh_is_freed_after_the_commit() {
+        let mut scene = Scene::new();
+        let id = scene.insert_static_mesh(triangle_mesh());
+        scene.add_static_mesh(id);
+        scene.commit();
+        scene.remove_static_mesh(id);
+        scene.forget_static_mesh(id);
+        // Still committed until the next commit.
+        assert!(hits_floor(&scene));
+        scene.commit();
+        assert!(!hits_floor(&scene));
+        let reused = scene.insert_static_mesh(triangle_mesh());
+        assert_ne!(reused, id);
+        assert!(scene.static_mesh(reused).is_some());
     }
 }

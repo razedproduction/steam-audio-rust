@@ -410,6 +410,246 @@ pub struct IPLDirectivity {
 }
 
 // --------------------------------------------------------------------------------------------------------------------
+// Scenes
+// --------------------------------------------------------------------------------------------------------------------
+
+pub type IPLSceneType = i32;
+pub const IPL_SCENETYPE_DEFAULT: IPLSceneType = 0;
+pub const IPL_SCENETYPE_EMBREE: IPLSceneType = 1;
+pub const IPL_SCENETYPE_RADEONRAYS: IPLSceneType = 2;
+pub const IPL_SCENETYPE_CUSTOM: IPLSceneType = 3;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct IPLTriangle {
+    pub indices: [IPLint32; 3],
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct IPLMaterial {
+    pub absorption: [IPLfloat32; IPL_NUM_BANDS],
+    pub scattering: IPLfloat32,
+    pub transmission: [IPLfloat32; IPL_NUM_BANDS],
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct IPLRay {
+    pub origin: IPLVector3,
+    pub direction: IPLVector3,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct IPLHit {
+    pub distance: IPLfloat32,
+    pub triangleIndex: IPLint32,
+    pub objectIndex: IPLint32,
+    pub materialIndex: IPLint32,
+    pub normal: IPLVector3,
+    pub material: *mut IPLMaterial,
+}
+
+pub type IPLClosestHitCallback = Option<
+    unsafe extern "system" fn(
+        ray: *const IPLRay,
+        min_distance: IPLfloat32,
+        max_distance: IPLfloat32,
+        hit: *mut IPLHit,
+        user_data: *mut c_void,
+    ),
+>;
+pub type IPLAnyHitCallback = Option<
+    unsafe extern "system" fn(
+        ray: *const IPLRay,
+        min_distance: IPLfloat32,
+        max_distance: IPLfloat32,
+        occluded: *mut IPLuint8,
+        user_data: *mut c_void,
+    ),
+>;
+pub type IPLBatchedClosestHitCallback = Option<
+    unsafe extern "system" fn(
+        num_rays: IPLint32,
+        rays: *const IPLRay,
+        min_distances: *const IPLfloat32,
+        max_distances: *const IPLfloat32,
+        hits: *mut IPLHit,
+        user_data: *mut c_void,
+    ),
+>;
+pub type IPLBatchedAnyHitCallback = Option<
+    unsafe extern "system" fn(
+        num_rays: IPLint32,
+        rays: *const IPLRay,
+        min_distances: *const IPLfloat32,
+        max_distances: *const IPLfloat32,
+        occluded: *mut IPLuint8,
+        user_data: *mut c_void,
+    ),
+>;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct IPLSceneSettings {
+    pub r#type: IPLSceneType,
+    pub closestHitCallback: IPLClosestHitCallback,
+    pub anyHitCallback: IPLAnyHitCallback,
+    pub batchedClosestHitCallback: IPLBatchedClosestHitCallback,
+    pub batchedAnyHitCallback: IPLBatchedAnyHitCallback,
+    pub userData: *mut c_void,
+    pub embreeDevice: IPLEmbreeDevice,
+    pub radeonRaysDevice: IPLRadeonRaysDevice,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct IPLStaticMeshSettings {
+    pub numVertices: IPLint32,
+    pub numTriangles: IPLint32,
+    pub numMaterials: IPLint32,
+    pub vertices: *mut IPLVector3,
+    pub triangles: *mut IPLTriangle,
+    pub materialIndices: *mut IPLint32,
+    pub materials: *mut IPLMaterial,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct IPLInstancedMeshSettings {
+    pub subScene: IPLScene,
+    /// Row-major, as the caller writes it; the library transposes it (see `iplInstancedMeshCreate`).
+    pub transform: IPLMatrix4x4,
+}
+
+// --------------------------------------------------------------------------------------------------------------------
+// Energy fields, impulse responses, reconstructors
+// --------------------------------------------------------------------------------------------------------------------
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct IPLEnergyFieldSettings {
+    pub duration: IPLfloat32,
+    pub order: IPLint32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct IPLImpulseResponseSettings {
+    pub duration: IPLfloat32,
+    pub order: IPLint32,
+    pub samplingRate: IPLint32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct IPLReconstructorSettings {
+    pub maxDuration: IPLfloat32,
+    pub maxOrder: IPLint32,
+    pub samplingRate: IPLint32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct IPLReconstructorInputs {
+    pub energyField: IPLEnergyField,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct IPLReconstructorSharedInputs {
+    pub duration: IPLfloat32,
+    pub order: IPLint32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct IPLReconstructorOutputs {
+    pub impulseResponse: IPLImpulseResponse,
+}
+
+// --------------------------------------------------------------------------------------------------------------------
+// Probes
+// --------------------------------------------------------------------------------------------------------------------
+
+pub type IPLProbeGenerationType = i32;
+pub const IPL_PROBEGENERATIONTYPE_CENTROID: IPLProbeGenerationType = 0;
+pub const IPL_PROBEGENERATIONTYPE_UNIFORMFLOOR: IPLProbeGenerationType = 1;
+
+pub type IPLBakedDataVariation = i32;
+pub const IPL_BAKEDDATAVARIATION_REVERB: IPLBakedDataVariation = 0;
+pub const IPL_BAKEDDATAVARIATION_STATICSOURCE: IPLBakedDataVariation = 1;
+pub const IPL_BAKEDDATAVARIATION_STATICLISTENER: IPLBakedDataVariation = 2;
+pub const IPL_BAKEDDATAVARIATION_DYNAMIC: IPLBakedDataVariation = 3;
+
+pub type IPLBakedDataType = i32;
+pub const IPL_BAKEDDATATYPE_REFLECTIONS: IPLBakedDataType = 0;
+pub const IPL_BAKEDDATATYPE_PATHING: IPLBakedDataType = 1;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct IPLProbeGenerationParams {
+    pub r#type: IPLProbeGenerationType,
+    pub spacing: IPLfloat32,
+    pub height: IPLfloat32,
+    /// Row-major, as the caller writes it; the library transposes it (see `iplProbeArrayGenerateProbes`).
+    pub transform: IPLMatrix4x4,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct IPLBakedDataIdentifier {
+    pub r#type: IPLBakedDataType,
+    pub variation: IPLBakedDataVariation,
+    pub endpointInfluence: IPLSphere,
+}
+
+// --------------------------------------------------------------------------------------------------------------------
+// Baking
+// --------------------------------------------------------------------------------------------------------------------
+
+pub type IPLReflectionsBakeFlags = i32;
+pub const IPL_REFLECTIONSBAKEFLAGS_BAKECONVOLUTION: IPLReflectionsBakeFlags = 1 << 0;
+pub const IPL_REFLECTIONSBAKEFLAGS_BAKEPARAMETRIC: IPLReflectionsBakeFlags = 1 << 1;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct IPLReflectionsBakeParams {
+    pub scene: IPLScene,
+    pub probeBatch: IPLProbeBatch,
+    pub sceneType: IPLSceneType,
+    pub identifier: IPLBakedDataIdentifier,
+    pub bakeFlags: IPLReflectionsBakeFlags,
+    pub numRays: IPLint32,
+    pub numDiffuseSamples: IPLint32,
+    pub numBounces: IPLint32,
+    pub simulatedDuration: IPLfloat32,
+    pub savedDuration: IPLfloat32,
+    pub order: IPLint32,
+    pub numThreads: IPLint32,
+    pub rayBatchSize: IPLint32,
+    pub irradianceMinDistance: IPLfloat32,
+    pub bakeBatchSize: IPLint32,
+    pub openCLDevice: IPLOpenCLDevice,
+    pub radeonRaysDevice: IPLRadeonRaysDevice,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct IPLPathBakeParams {
+    pub scene: IPLScene,
+    pub probeBatch: IPLProbeBatch,
+    pub identifier: IPLBakedDataIdentifier,
+    pub numSamples: IPLint32,
+    pub radius: IPLfloat32,
+    pub threshold: IPLfloat32,
+    pub visRange: IPLfloat32,
+    pub pathRange: IPLfloat32,
+    pub numThreads: IPLint32,
+}
+
+// --------------------------------------------------------------------------------------------------------------------
 // Opaque handles
 // --------------------------------------------------------------------------------------------------------------------
 
@@ -440,4 +680,15 @@ opaque_handles! {
     IPLAmbisonicsRotationEffect => _IPLAmbisonicsRotationEffect_t;
     IPLAmbisonicsDecodeEffect => _IPLAmbisonicsDecodeEffect_t;
     IPLDirectEffect => _IPLDirectEffect_t;
+    IPLEmbreeDevice => _IPLEmbreeDevice_t;
+    IPLOpenCLDevice => _IPLOpenCLDevice_t;
+    IPLRadeonRaysDevice => _IPLRadeonRaysDevice_t;
+    IPLScene => _IPLScene_t;
+    IPLStaticMesh => _IPLStaticMesh_t;
+    IPLInstancedMesh => _IPLInstancedMesh_t;
+    IPLEnergyField => _IPLEnergyField_t;
+    IPLImpulseResponse => _IPLImpulseResponse_t;
+    IPLReconstructor => _IPLReconstructor_t;
+    IPLProbeArray => _IPLProbeArray_t;
+    IPLProbeBatch => _IPLProbeBatch_t;
 }

@@ -1,7 +1,9 @@
 //! The context (upstream `api_context.cpp`, `context.cpp`, the context part of `api_validation_layer.cpp`) and
 //! `iplCalculateRelativeDirection` (`api_geometry.cpp`).
 
+use steam_audio::baking::ReflectionBaker;
 use steam_audio::math::Vector3;
+use steam_audio::pathing::PathBaker;
 
 use crate::handle::{Handle, retain_release};
 use crate::types::*;
@@ -16,6 +18,9 @@ pub(crate) struct Context {
     /// Accepted for compatibility; nothing is logged yet.
     #[allow(dead_code)]
     log_callback: IPLLogFunction,
+    /// Upstream's bakers are static functions with global cancel flags; here each context has its own.
+    pub(crate) reflection_baker: ReflectionBaker,
+    pub(crate) path_baker: PathBaker,
 }
 
 impl Context {
@@ -63,6 +68,8 @@ pub unsafe extern "system" fn iplContextCreate(
         let value = Context {
             version: settings.version,
             log_callback: settings.logCallback,
+            reflection_baker: ReflectionBaker::new(),
+            path_baker: PathBaker::new(),
         };
         *context = Handle::into_raw(value, None);
         IPL_STATUS_SUCCESS

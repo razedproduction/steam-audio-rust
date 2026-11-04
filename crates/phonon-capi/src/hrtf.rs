@@ -138,7 +138,7 @@ unsafe fn load(
             if !settings.sofaFileName.is_null() {
                 // SAFETY: guaranteed by the caller.
                 let name = unsafe { std::ffi::CStr::from_ptr(settings.sofaFileName) };
-                let path = sofa_path(name).ok_or(IPL_STATUS_FAILURE)?;
+                let path = crate::c_path(name).ok_or(IPL_STATUS_FAILURE)?;
                 database(HrtfSource::SofaFile(&path)).map_err(|error| match error {
                     Error::Sofa(_) | Error::UnsupportedSofaDelay => IPL_STATUS_FAILURE,
                     _ => IPL_STATUS_INITIALIZATION,
@@ -159,20 +159,6 @@ unsafe fn load(
             }
         }
         _ => Err(IPL_STATUS_INITIALIZATION),
-    }
-}
-
-/// The file name as a path: bytes on Unix, UTF-8 elsewhere (upstream passes the `char*` to `fopen`).
-#[cfg(feature = "sofa")]
-fn sofa_path(name: &std::ffi::CStr) -> Option<std::path::PathBuf> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::ffi::OsStrExt;
-        Some(std::ffi::OsStr::from_bytes(name.to_bytes()).into())
-    }
-    #[cfg(not(unix))]
-    {
-        name.to_str().ok().map(Into::into)
     }
 }
 

@@ -14,9 +14,57 @@ pub(crate) enum SerializedData {
     Empty,
     /// The caller's buffer, which upstream wraps without copying; the caller keeps it alive.
     External { data: *mut u8, size: usize },
-    /// Written by a `save` function (stage 8b).
-    #[allow(dead_code)]
+    /// Written by a `save` function.
     Owned(Vec<u8>),
+}
+
+impl SerializedData {
+    /// The bytes.
+    ///
+    /// # Safety
+    ///
+    /// For `External`, the caller's buffer is still valid for reads of `size` bytes.
+    unsafe fn bytes(&self) -> &[u8] {
+        match self {
+            Self::Empty => &[],
+            // SAFETY: guaranteed by the caller.
+            Self::External { data, size } => unsafe { std::slice::from_raw_parts(*data, *size) },
+            Self::Owned(bytes) => bytes,
+        }
+    }
+}
+
+/// Runs `f` on the bytes of a serialized object; `None` for a null handle.
+///
+/// # Safety
+///
+/// `serializedObject` is null or a live serialized object, whose caller's buffer (if it wraps one) is still valid.
+pub(crate) unsafe fn with_serialized_bytes<R>(
+    serializedObject: IPLSerializedObject,
+    f: impl FnOnce(&[u8]) -> R,
+) -> Option<R> {
+    // SAFETY: guaranteed by the caller.
+    let handle = unsafe { Handle::<SerializedObject>::from_raw(serializedObject) }?;
+    let data = lock(handle.get());
+    // SAFETY: guaranteed by the caller.
+    Some(f(unsafe { data.bytes() }))
+}
+
+/// Replaces the contents of a serialized object with `bytes` (upstream `serializeAsRoot`). Does nothing for a null
+/// handle.
+///
+/// Upstream writes into the object's FlatBuffers builder, which it never clears: an object made from the caller's data
+/// has none (a crash), and a second save builds on in the first one's finished buffer. Here the contents are replaced
+/// in both cases.
+///
+/// # Safety
+///
+/// `serializedObject` is null or a live serialized object.
+pub(crate) unsafe fn store_serialized_bytes(serializedObject: IPLSerializedObject, bytes: Vec<u8>) {
+    // SAFETY: guaranteed by the caller.
+    if let Some(handle) = unsafe { Handle::<SerializedObject>::from_raw(serializedObject) } {
+        *lock(handle.get()) = SerializedData::Owned(bytes);
+    }
 }
 
 // SAFETY: `External` only holds the address of the caller's buffer; the API contract makes the caller responsible for

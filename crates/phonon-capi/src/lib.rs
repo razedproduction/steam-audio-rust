@@ -8,7 +8,8 @@
 //! every function catches panics, which must not unwind into C. `DEVIATIONS.md` lists the differences.
 //!
 //! Stage 8a covers the context, serialized objects, audio buffers, HRTFs, the audio effects that do not need a
-//! simulator, and the direct-sound model functions; scenes, probes, baking and simulation follow in 8b.
+//! simulator, and the direct-sound model functions; 8b scenes, energy fields, impulse responses, reconstructors, probes
+//! and baking. The simulator and the reflection and path effects follow in 8c.
 
 // The C ABI needs raw pointers and exported symbols; every unsafe block states why it is sound.
 #![allow(unsafe_code)]
@@ -17,26 +18,41 @@
 #![allow(non_snake_case)]
 
 mod audio_buffer;
+mod baking;
 mod buffer;
 mod context;
 mod effects;
+mod energy_field;
 mod handle;
 mod hrtf;
+mod impulse_response;
 mod models;
+mod probes;
+mod reconstructor;
+mod scene;
 mod serialized_object;
 pub mod types;
 
+use std::ffi::CStr;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::path::PathBuf;
 
-use steam_audio::math::{CoordinateSpace3, Vector3};
+use steam_audio::geometry::Sphere;
+use steam_audio::math::{CoordinateSpace3, Matrix4, Vector3};
 
 pub use audio_buffer::*;
+pub use baking::*;
 pub use context::{
     iplCalculateRelativeDirection, iplContextCreate, iplContextRelease, iplContextRetain,
 };
 pub use effects::*;
+pub use energy_field::*;
 pub use hrtf::*;
+pub use impulse_response::*;
 pub use models::*;
+pub use probes::*;
+pub use reconstructor::*;
+pub use scene::*;
 pub use serialized_object::*;
 pub use types::*;
 
@@ -63,5 +79,36 @@ fn from_ipl_coordinate_space(c: &IPLCoordinateSpace3) -> CoordinateSpace3 {
         up: from_ipl_vector(c.up),
         ahead: from_ipl_vector(c.ahead),
         origin: from_ipl_vector(c.origin),
+    }
+}
+
+/// An `IPLMatrix4x4` (row-major) as a matrix. Upstream reinterprets the elements as its own column-major
+/// `Matrix4x4f` and then transposes it, which amounts to reading them row by row.
+fn from_ipl_matrix(m: &IPLMatrix4x4) -> Matrix4 {
+    Matrix4::from_rows(m.elements)
+}
+
+fn from_ipl_sphere(s: IPLSphere) -> Sphere {
+    Sphere::new(from_ipl_vector(s.center), s.radius)
+}
+
+fn to_ipl_sphere(s: Sphere) -> IPLSphere {
+    IPLSphere {
+        center: to_ipl_vector(s.center),
+        radius: s.radius,
+    }
+}
+
+/// A file name from the API as a path: bytes on Unix, UTF-8 elsewhere (upstream passes the `char*` to `fopen`, or
+/// converts it from UTF-8 to UTF-16 for `_wfopen` on Windows).
+fn c_path(name: &CStr) -> Option<PathBuf> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        Some(std::ffi::OsStr::from_bytes(name.to_bytes()).into())
+    }
+    #[cfg(not(unix))]
+    {
+        name.to_str().ok().map(Into::into)
     }
 }
