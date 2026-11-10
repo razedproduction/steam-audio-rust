@@ -2,7 +2,8 @@
 //!
 //! A handle is a boxed [`Handle`] cast to the opaque pointer type of `phonon.h`. Like upstream, it counts the
 //! references the caller holds; the last `release` frees it. The object itself sits in an `Arc`, so that objects that
-//! use one another (static meshes and their scene; the simulator and its sources, stage 8c) can share it past the caller's last reference. Every object
+//! use one another (static meshes and their scene; a simulator, its scene and its sources) can share it past the
+//! caller's last reference. Every object
 //! but the context also keeps its context alive, as upstream's handles hold a `shared_ptr<Context>`.
 
 use std::sync::atomic::{AtomicUsize, Ordering};

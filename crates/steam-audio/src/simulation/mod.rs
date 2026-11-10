@@ -28,7 +28,7 @@ pub use energy_field::EnergyField;
 pub use hybrid_reverb_estimator::{HybridReverbEstimate, HybridReverbEstimator};
 pub use impulse_response::ImpulseResponse;
 pub use manager::{
-    SceneType, SharedDirectSimulationInputs, SharedPathingSimulationInputs,
+    SceneRef, SceneType, SharedDirectSimulationInputs, SharedPathingSimulationInputs,
     SharedReflectionSimulationInputs, SharedSimulationData, SimulationManager, SimulationScene,
     SimulationSettings, ValidationRayVisualizationCallback,
 };

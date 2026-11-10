@@ -11,10 +11,12 @@ use std::ffi::{CStr, c_void};
 use std::sync::{Arc, Mutex, RwLock};
 
 use steam_audio::geometry::Ray;
+use steam_audio::math::Vector3;
 use steam_audio::scene::{
     Hit, InstancedMesh, InstancedMeshId, Material, RayTracer, Scene, StaticMesh, StaticMeshId,
     Triangle,
 };
+use steam_audio::simulation::SimulationScene;
 
 use crate::context::context_arc;
 use crate::handle::{Handle, lock, object, read, retain_release, write};
@@ -46,6 +48,63 @@ impl SceneObject {
             Self::Default(scene) => Some(scene),
             Self::Custom(_) => None,
         }
+    }
+
+    /// The scene as a simulator shares it: a default scene is read-locked for each simulation, so that the caller's
+    /// later changes and commits show, as upstream's shared scene does.
+    pub(crate) fn simulation_scene(self: &Arc<Self>) -> SimulationScene {
+        match &**self {
+            Self::Default(scene) => SimulationScene::Shared(Arc::clone(&scene.scene)),
+            Self::Custom(_) => SimulationScene::Custom(Box::new(CustomSceneRef(Arc::clone(self)))),
+        }
+    }
+}
+
+/// A custom scene shared with a simulator.
+struct CustomSceneRef(Arc<SceneObject>);
+
+impl CustomSceneRef {
+    fn scene(&self) -> &CustomScene {
+        match &*self.0 {
+            SceneObject::Custom(scene) => scene,
+            SceneObject::Default(_) => unreachable!("made from a custom scene"),
+        }
+    }
+}
+
+impl RayTracer for CustomSceneRef {
+    fn closest_hit(&self, ray: &Ray, min_distance: f32, max_distance: f32) -> Hit {
+        self.scene().closest_hit(ray, min_distance, max_distance)
+    }
+
+    fn any_hit(&self, ray: &Ray, min_distance: f32, max_distance: f32) -> bool {
+        self.scene().any_hit(ray, min_distance, max_distance)
+    }
+
+    fn closest_hits(
+        &self,
+        rays: &[Ray],
+        min_distances: &[f32],
+        max_distances: &[f32],
+        hits: &mut [Hit],
+    ) {
+        self.scene()
+            .closest_hits(rays, min_distances, max_distances, hits);
+    }
+
+    fn any_hits(
+        &self,
+        rays: &[Ray],
+        min_distances: &[f32],
+        max_distances: &[f32],
+        occluded: &mut [bool],
+    ) {
+        self.scene()
+            .any_hits(rays, min_distances, max_distances, occluded);
+    }
+
+    fn is_occluded(&self, from: Vector3, to: Vector3) -> bool {
+        self.scene().is_occluded(from, to)
     }
 }
 

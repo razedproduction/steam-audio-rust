@@ -9,7 +9,7 @@
 //!
 //! Stage 8a covers the context, serialized objects, audio buffers, HRTFs, the audio effects that do not need a
 //! simulator, and the direct-sound model functions; 8b scenes, energy fields, impulse responses, reconstructors, probes
-//! and baking. The simulator and the reflection and path effects follow in 8c.
+//! and baking; 8c the simulator and its sources, and the reflection and path effects.
 
 // The C ABI needs raw pointers and exported symbols; every unsafe block states why it is sound.
 #![allow(unsafe_code)]
@@ -26,11 +26,14 @@ mod energy_field;
 mod handle;
 mod hrtf;
 mod impulse_response;
+mod indirect_effect;
 mod models;
 mod probes;
+mod rand;
 mod reconstructor;
 mod scene;
 mod serialized_object;
+mod simulator;
 pub mod types;
 
 use std::ffi::CStr;
@@ -49,11 +52,13 @@ pub use effects::*;
 pub use energy_field::*;
 pub use hrtf::*;
 pub use impulse_response::*;
+pub use indirect_effect::*;
 pub use models::*;
 pub use probes::*;
 pub use reconstructor::*;
 pub use scene::*;
 pub use serialized_object::*;
+pub use simulator::*;
 pub use types::*;
 
 /// Runs `f`, returning `default` if it panics, so that no panic unwinds into C.
