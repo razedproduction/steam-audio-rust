@@ -8,7 +8,7 @@ use steam_audio::simulation::{ReconstructionParams, ReconstructionType, Reconstr
 use crate::context::context_arc;
 use crate::energy_field::{array_len, energy_field_ref};
 use crate::guard;
-use crate::handle::{Handle, lock, object, retain_release};
+use crate::handle::{Handle, lock, object, retain_release, validator};
 use crate::impulse_response::impulse_response_ref;
 use crate::types::*;
 
@@ -41,6 +41,20 @@ pub unsafe extern "system" fn iplReconstructorCreate(
         let Some(context) = (unsafe { context_arc(context) }) else {
             return IPL_STATUS_FAILURE;
         };
+        if let Some(v) = context.validator("createReconstructor") {
+            if v.pointer("settings", settings) {
+                // SAFETY: not null; valid as guaranteed by the caller.
+                let s = unsafe { &*settings };
+                v.float_if("settings->maxDuration", s.maxDuration, s.maxDuration > 0.0);
+                v.int("settings->maxOrder", s.maxOrder, s.maxOrder >= 0);
+                v.int(
+                    "settings->samplingRate",
+                    s.samplingRate,
+                    s.samplingRate >= 0,
+                );
+            }
+            v.pointer("reconstructor", reconstructor);
+        }
         // SAFETY: guaranteed by the caller.
         let (Some(settings), Some(out)) = (unsafe { settings.as_ref() }, unsafe {
             reconstructor.as_mut()
@@ -89,6 +103,58 @@ retain_release!(
 /// holding null or live handles, and `sharedInputs` is null or valid.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn iplReconstructorReconstruct(
+    reconstructor: IPLReconstructor,
+    numInputs: IPLint32,
+    inputs: *mut IPLReconstructorInputs,
+    sharedInputs: *mut IPLReconstructorSharedInputs,
+    outputs: *mut IPLReconstructorOutputs,
+) {
+    // SAFETY: guaranteed by the caller.
+    if let Some(v) = unsafe { validator::<ReconstructorObject, _>(reconstructor, "reconstruct") } {
+        let n = usize::try_from(numInputs).unwrap_or(0);
+        v.int("numInputs", numInputs, numInputs >= 0);
+        // Upstream indexes a null `inputs` or `outputs`; the port skips their elements.
+        if v.pointer("inputs", inputs) {
+            for i in 0..n {
+                // SAFETY: guaranteed by the caller.
+                let input = unsafe { inputs.add(i) };
+                v.pointer("(&inputs[i])", input);
+                // SAFETY: guaranteed by the caller.
+                v.pointer("(&inputs[i])->energyField", unsafe { (*input).energyField });
+            }
+        }
+        if v.pointer("sharedInputs", sharedInputs) {
+            // SAFETY: not null; valid as guaranteed by the caller.
+            let shared = unsafe { &*sharedInputs };
+            v.float_if(
+                "sharedInputs->duration",
+                shared.duration,
+                shared.duration > 0.0,
+            );
+            v.int("sharedInputs->order", shared.order, shared.order >= 0);
+        }
+        if v.pointer("outputs", outputs) {
+            for i in 0..n {
+                // SAFETY: guaranteed by the caller.
+                let output = unsafe { outputs.add(i) };
+                v.pointer("(&outputs[i])", output);
+                // SAFETY: guaranteed by the caller.
+                v.pointer("(&outputs[i])->impulseResponse", unsafe {
+                    (*output).impulseResponse
+                });
+            }
+        }
+    }
+    // SAFETY: guaranteed by the caller.
+    unsafe { reconstruct(reconstructor, numInputs, inputs, sharedInputs, outputs) }
+}
+
+/// [`iplReconstructorReconstruct`] without validation.
+///
+/// # Safety
+///
+/// As [`iplReconstructorReconstruct`].
+unsafe fn reconstruct(
     reconstructor: IPLReconstructor,
     numInputs: IPLint32,
     inputs: *mut IPLReconstructorInputs,

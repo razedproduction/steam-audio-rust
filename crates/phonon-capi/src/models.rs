@@ -8,7 +8,12 @@ use steam_audio::bands::NUM_BANDS;
 use steam_audio::directivity::Directivity;
 use steam_audio::distance_attenuation::DistanceAttenuationModel;
 
+use crate::context::context_validator;
 use crate::types::*;
+use crate::validation::{
+    air_absorption_model, coordinate_space3, directivity as validate_directivity,
+    distance_attenuation_model, vector3,
+};
 use crate::{from_ipl_coordinate_space, from_ipl_vector, guard, to_ipl_vector};
 
 /// A caller's `userData` pointer, passed back to its callback.
@@ -98,6 +103,32 @@ pub unsafe extern "system" fn iplDistanceAttenuationCalculate(
     listener: IPLVector3,
     model: *mut IPLDistanceAttenuationModel,
 ) -> IPLfloat32 {
+    // SAFETY: guaranteed by the caller.
+    let v = unsafe { context_validator(context, "calculateDistanceAttenuation") };
+    if let Some(v) = v {
+        vector3!(v, source, "source");
+        vector3!(v, listener, "listener");
+        distance_attenuation_model!(v, model, "model");
+    }
+    // SAFETY: guaranteed by the caller.
+    let result = unsafe { distance_attenuation_calculate(context, source, listener, model) };
+    if let Some(v) = v {
+        v.float("result", result);
+    }
+    result
+}
+
+/// [`iplDistanceAttenuationCalculate`] without validation.
+///
+/// # Safety
+///
+/// As [`iplDistanceAttenuationCalculate`].
+unsafe fn distance_attenuation_calculate(
+    context: IPLContext,
+    source: IPLVector3,
+    listener: IPLVector3,
+    model: *mut IPLDistanceAttenuationModel,
+) -> IPLfloat32 {
     if context.is_null() {
         return 1.0;
     }
@@ -120,6 +151,41 @@ pub unsafe extern "system" fn iplDistanceAttenuationCalculate(
 /// `airAbsorption` is null or valid for writes of 3 floats.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn iplAirAbsorptionCalculate(
+    context: IPLContext,
+    source: IPLVector3,
+    listener: IPLVector3,
+    model: *mut IPLAirAbsorptionModel,
+    airAbsorption: *mut IPLfloat32,
+) {
+    // SAFETY: guaranteed by the caller.
+    let v = unsafe { context_validator(context, "calculateAirAbsorption") };
+    if let Some(v) = v {
+        vector3!(v, source, "source");
+        vector3!(v, listener, "listener");
+        air_absorption_model!(v, model, "model");
+        v.pointer("airAbsorption", airAbsorption);
+    }
+    // SAFETY: guaranteed by the caller.
+    unsafe { air_absorption_calculate(context, source, listener, model, airAbsorption) };
+    if let Some(v) = v {
+        // SAFETY: guaranteed by the caller.
+        unsafe {
+            v.float_array(
+                "airAbsorption",
+                "airAbsorption[iArray]",
+                airAbsorption,
+                NUM_BANDS as i32,
+            )
+        };
+    }
+}
+
+/// [`iplAirAbsorptionCalculate`] without validation.
+///
+/// # Safety
+///
+/// As [`iplAirAbsorptionCalculate`].
+unsafe fn air_absorption_calculate(
     context: IPLContext,
     source: IPLVector3,
     listener: IPLVector3,
@@ -151,6 +217,32 @@ pub unsafe extern "system" fn iplAirAbsorptionCalculate(
 /// `context` is null or a live context, and `model` is null or valid, with a callback that is safe to call.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn iplDirectivityCalculate(
+    context: IPLContext,
+    source: IPLCoordinateSpace3,
+    listener: IPLVector3,
+    model: *mut IPLDirectivity,
+) -> IPLfloat32 {
+    // SAFETY: guaranteed by the caller.
+    let v = unsafe { context_validator(context, "calculateDirectivity") };
+    if let Some(v) = v {
+        coordinate_space3!(v, source, "source");
+        vector3!(v, listener, "listener");
+        validate_directivity!(v, model, "model");
+    }
+    // SAFETY: guaranteed by the caller.
+    let result = unsafe { directivity_calculate(context, source, listener, model) };
+    if let Some(v) = v {
+        v.float("result", result);
+    }
+    result
+}
+
+/// [`iplDirectivityCalculate`] without validation.
+///
+/// # Safety
+///
+/// As [`iplDirectivityCalculate`].
+unsafe fn directivity_calculate(
     context: IPLContext,
     source: IPLCoordinateSpace3,
     listener: IPLVector3,

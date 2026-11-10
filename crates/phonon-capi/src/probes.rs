@@ -10,10 +10,11 @@ use steam_audio::probes::{Probe, ProbeBatch, ProbeGeneration, generate_probes};
 
 use crate::context::context_arc;
 use crate::energy_field::energy_field_ref;
-use crate::handle::{Handle, lock, object, retain_release};
+use crate::handle::{Handle, lock, object, retain_release, validator};
 use crate::scene::scene_arc;
 use crate::serialized_object::{store_serialized_bytes, with_serialized_bytes};
 use crate::types::*;
+use crate::validation::{Validator, baked_data_identifier, matrix4x4, sphere};
 use crate::{from_ipl_matrix, from_ipl_sphere, guard, to_ipl_sphere};
 
 pub(crate) type ProbeArrayObject = Mutex<Vec<Probe>>;
@@ -42,6 +43,29 @@ pub(crate) fn from_ipl_identifier(
     })
 }
 
+/// `VALIDATE_POINTER(identifier)` and `VALIDATE_IPLBakedDataIdentifier((*identifier))`.
+///
+/// # Safety
+///
+/// `identifier` is null or valid.
+unsafe fn validate_identifier(v: Validator, identifier: *const IPLBakedDataIdentifier) {
+    if v.pointer("identifier", identifier) {
+        // SAFETY: not null; valid as guaranteed by the caller.
+        baked_data_identifier!(v, unsafe { *identifier }, "(*identifier)");
+    }
+}
+
+/// `VALIDATE(IPLint32, <name>, (0 <= <name> && <name> < getNumProbes()))` on a batch.
+///
+/// # Safety
+///
+/// `batch` is null or a live probe batch.
+unsafe fn validate_probe_index(v: Validator, name: &str, index: IPLint32, batch: IPLProbeBatch) {
+    // SAFETY: guaranteed by the caller.
+    let num_probes = unsafe { iplProbeBatchGetNumProbes(batch) };
+    v.int(name, index, 0 <= index && index < num_probes);
+}
+
 /// A probe index from the API, if it is in range.
 fn probe_index(index: IPLint32, num_probes: usize) -> Option<usize> {
     usize::try_from(index).ok().filter(|&i| i < num_probes)
@@ -63,9 +87,14 @@ pub unsafe extern "system" fn iplProbeArrayCreate(
 ) -> IPLerror {
     guard(IPL_STATUS_FAILURE, || {
         // SAFETY: guaranteed by the caller.
-        let (Some(context), Some(out)) = (unsafe { context_arc(context) }, unsafe {
-            probeArray.as_mut()
-        }) else {
+        let Some(context) = (unsafe { context_arc(context) }) else {
+            return IPL_STATUS_FAILURE;
+        };
+        if let Some(v) = context.validator("createProbeArray") {
+            v.pointer("probeArray", probeArray);
+        }
+        // SAFETY: guaranteed by the caller.
+        let Some(out) = (unsafe { probeArray.as_mut() }) else {
             return IPL_STATUS_FAILURE;
         };
         *out = Handle::into_raw(Mutex::new(Vec::<Probe>::new()), Some(context));
@@ -93,6 +122,28 @@ pub unsafe extern "system" fn iplProbeArrayGenerateProbes(
     params: *mut IPLProbeGenerationParams,
 ) {
     guard((), || {
+        // SAFETY: guaranteed by the caller.
+        if let Some(v) = unsafe { validator::<ProbeArrayObject, _>(probeArray, "generateProbes") } {
+            v.pointer("scene", scene);
+            if v.pointer("params", params) {
+                // SAFETY: not null; valid as guaranteed by the caller.
+                let p = unsafe { &*params };
+                v.range(
+                    "IPLProbeGenerationType",
+                    "params->type",
+                    p.r#type,
+                    IPL_PROBEGENERATIONTYPE_CENTROID,
+                    IPL_PROBEGENERATIONTYPE_UNIFORMFLOOR,
+                );
+                if p.r#type != IPL_PROBEGENERATIONTYPE_CENTROID {
+                    v.float_if("params->spacing", p.spacing, p.spacing > 0.0);
+                }
+                if p.r#type == IPL_PROBEGENERATIONTYPE_UNIFORMFLOOR {
+                    v.float_if("params->height", p.height, p.height > 0.0);
+                }
+                matrix4x4!(v, p.transform, "params->transform");
+            }
+        }
         // SAFETY: guaranteed by the caller.
         let (Some(array), Some(scene), Some(params)) = (
             unsafe { object::<ProbeArrayObject, _>(probeArray) },
@@ -138,6 +189,27 @@ pub unsafe extern "system" fn iplProbeArrayGetProbe(
     index: IPLint32,
 ) -> IPLSphere {
     // SAFETY: guaranteed by the caller.
+    let v = unsafe { validator::<ProbeArrayObject, _>(probeArray, "getProbe") };
+    if let Some(v) = v {
+        // SAFETY: guaranteed by the caller.
+        let num_probes = unsafe { iplProbeArrayGetNumProbes(probeArray) };
+        v.int("index", index, 0 <= index && index < num_probes);
+    }
+    // SAFETY: guaranteed by the caller.
+    let result = unsafe { probe_array_get_probe(probeArray, index) };
+    if let Some(v) = v {
+        sphere!(v, result, "result");
+    }
+    result
+}
+
+/// [`iplProbeArrayGetProbe`] without validation.
+///
+/// # Safety
+///
+/// As [`iplProbeArrayGetProbe`].
+unsafe fn probe_array_get_probe(probeArray: IPLProbeArray, index: IPLint32) -> IPLSphere {
+    // SAFETY: guaranteed by the caller.
     let Some(array) = (unsafe { object::<ProbeArrayObject, _>(probeArray) }) else {
         return IPLSphere::default();
     };
@@ -162,9 +234,14 @@ pub unsafe extern "system" fn iplProbeBatchCreate(
 ) -> IPLerror {
     guard(IPL_STATUS_FAILURE, || {
         // SAFETY: guaranteed by the caller.
-        let (Some(context), Some(out)) = (unsafe { context_arc(context) }, unsafe {
-            probeBatch.as_mut()
-        }) else {
+        let Some(context) = (unsafe { context_arc(context) }) else {
+            return IPL_STATUS_FAILURE;
+        };
+        if let Some(v) = context.validator("createProbeBatch") {
+            v.pointer("probeBatch", probeBatch);
+        }
+        // SAFETY: guaranteed by the caller.
+        let Some(out) = (unsafe { probeBatch.as_mut() }) else {
             return IPL_STATUS_FAILURE;
         };
         *out = Handle::into_raw(Mutex::new(Arc::new(ProbeBatch::new())), Some(context));
@@ -194,9 +271,15 @@ pub unsafe extern "system" fn iplProbeBatchLoad(
 ) -> IPLerror {
     guard(IPL_STATUS_FAILURE, || {
         // SAFETY: guaranteed by the caller.
-        let (Some(context), Some(out)) = (unsafe { context_arc(context) }, unsafe {
-            probeBatch.as_mut()
-        }) else {
+        let Some(context) = (unsafe { context_arc(context) }) else {
+            return IPL_STATUS_FAILURE;
+        };
+        if let Some(v) = context.validator("loadProbeBatch") {
+            v.pointer("serializedObject", serializedObject);
+            v.pointer("probeBatch", probeBatch);
+        }
+        // SAFETY: guaranteed by the caller.
+        let Some(out) = (unsafe { probeBatch.as_mut() }) else {
             return IPL_STATUS_FAILURE;
         };
         // SAFETY: guaranteed by the caller.
@@ -246,6 +329,10 @@ pub unsafe extern "system" fn iplProbeBatchSave(
 ) {
     guard((), || {
         // SAFETY: guaranteed by the caller.
+        if let Some(v) = unsafe { validator::<ProbeBatchObject, _>(probeBatch, "save") } {
+            v.pointer("serializedObject", serializedObject);
+        }
+        // SAFETY: guaranteed by the caller.
         if let Some(batch) = unsafe { probe_batch_ref(probeBatch) } {
             let bytes = lock(batch).serialize();
             // SAFETY: guaranteed by the caller.
@@ -273,6 +360,20 @@ pub unsafe extern "system" fn iplProbeBatchGetNumProbes(probeBatch: IPLProbeBatc
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn iplProbeBatchAddProbe(probeBatch: IPLProbeBatch, probe: IPLSphere) {
     // SAFETY: guaranteed by the caller.
+    if let Some(v) = unsafe { validator::<ProbeBatchObject, _>(probeBatch, "addProbe") } {
+        sphere!(v, probe, "probe");
+    }
+    // SAFETY: guaranteed by the caller.
+    unsafe { probe_batch_add_probe(probeBatch, probe) }
+}
+
+/// [`iplProbeBatchAddProbe`] without validation.
+///
+/// # Safety
+///
+/// As [`iplProbeBatchAddProbe`].
+unsafe fn probe_batch_add_probe(probeBatch: IPLProbeBatch, probe: IPLSphere) {
+    // SAFETY: guaranteed by the caller.
     unsafe { update(probeBatch, |batch| batch.add_probe(from_ipl_sphere(probe))) };
 }
 
@@ -286,6 +387,20 @@ pub unsafe extern "system" fn iplProbeBatchAddProbeArray(
     probeBatch: IPLProbeBatch,
     probeArray: IPLProbeArray,
 ) {
+    // SAFETY: guaranteed by the caller.
+    if let Some(v) = unsafe { validator::<ProbeBatchObject, _>(probeBatch, "addProbeArray") } {
+        v.pointer("probeArray", probeArray);
+    }
+    // SAFETY: guaranteed by the caller.
+    unsafe { probe_batch_add_probe_array(probeBatch, probeArray) }
+}
+
+/// [`iplProbeBatchAddProbeArray`] without validation.
+///
+/// # Safety
+///
+/// As [`iplProbeBatchAddProbeArray`].
+unsafe fn probe_batch_add_probe_array(probeBatch: IPLProbeBatch, probeArray: IPLProbeArray) {
     // SAFETY: guaranteed by the caller.
     let Some(array) = (unsafe { object::<ProbeArrayObject, _>(probeArray) }) else {
         return;
@@ -302,6 +417,21 @@ pub unsafe extern "system" fn iplProbeBatchAddProbeArray(
 /// `probeBatch` is null or a live probe batch.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn iplProbeBatchRemoveProbe(probeBatch: IPLProbeBatch, index: IPLint32) {
+    // SAFETY: guaranteed by the caller.
+    if let Some(v) = unsafe { validator::<ProbeBatchObject, _>(probeBatch, "removeProbe") } {
+        // SAFETY: guaranteed by the caller.
+        unsafe { validate_probe_index(v, "index", index, probeBatch) };
+    }
+    // SAFETY: guaranteed by the caller.
+    unsafe { probe_batch_remove_probe(probeBatch, index) }
+}
+
+/// [`iplProbeBatchRemoveProbe`] without validation.
+///
+/// # Safety
+///
+/// As [`iplProbeBatchRemoveProbe`].
+unsafe fn probe_batch_remove_probe(probeBatch: IPLProbeBatch, index: IPLint32) {
     // SAFETY: guaranteed by the caller.
     unsafe {
         update(probeBatch, |batch| {
@@ -335,6 +465,24 @@ pub unsafe extern "system" fn iplProbeBatchRemoveData(
     identifier: *mut IPLBakedDataIdentifier,
 ) {
     // SAFETY: guaranteed by the caller.
+    if let Some(v) = unsafe { validator::<ProbeBatchObject, _>(probeBatch, "removeData") } {
+        // SAFETY: guaranteed by the caller.
+        unsafe { validate_identifier(v, identifier) };
+    }
+    // SAFETY: guaranteed by the caller.
+    unsafe { probe_batch_remove_data(probeBatch, identifier) }
+}
+
+/// [`iplProbeBatchRemoveData`] without validation.
+///
+/// # Safety
+///
+/// As [`iplProbeBatchRemoveData`].
+unsafe fn probe_batch_remove_data(
+    probeBatch: IPLProbeBatch,
+    identifier: *mut IPLBakedDataIdentifier,
+) {
+    // SAFETY: guaranteed by the caller.
     let Some(identifier) = unsafe { identifier.as_ref() }.and_then(from_ipl_identifier) else {
         return;
     };
@@ -354,6 +502,24 @@ pub unsafe extern "system" fn iplProbeBatchRemoveData(
 /// `probeBatch` is null or a live probe batch, and `identifier` null or valid.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn iplProbeBatchGetDataSize(
+    probeBatch: IPLProbeBatch,
+    identifier: *mut IPLBakedDataIdentifier,
+) -> IPLsize {
+    // SAFETY: guaranteed by the caller.
+    if let Some(v) = unsafe { validator::<ProbeBatchObject, _>(probeBatch, "getDataSize") } {
+        // SAFETY: guaranteed by the caller.
+        unsafe { validate_identifier(v, identifier) };
+    }
+    // SAFETY: guaranteed by the caller.
+    unsafe { probe_batch_get_data_size(probeBatch, identifier) }
+}
+
+/// [`iplProbeBatchGetDataSize`] without validation.
+///
+/// # Safety
+///
+/// As [`iplProbeBatchGetDataSize`].
+unsafe fn probe_batch_get_data_size(
     probeBatch: IPLProbeBatch,
     identifier: *mut IPLBakedDataIdentifier,
 ) -> IPLsize {
@@ -380,6 +546,30 @@ pub unsafe extern "system" fn iplProbeBatchGetDataSize(
 /// field.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn iplProbeBatchGetEnergyField(
+    probeBatch: IPLProbeBatch,
+    identifier: *mut IPLBakedDataIdentifier,
+    probeIndex: IPLint32,
+    energyField: IPLEnergyField,
+) {
+    // SAFETY: guaranteed by the caller.
+    if let Some(v) = unsafe { validator::<ProbeBatchObject, _>(probeBatch, "getEnergyField") } {
+        // SAFETY: guaranteed by the caller.
+        unsafe {
+            validate_identifier(v, identifier);
+            validate_probe_index(v, "probeIndex", probeIndex, probeBatch);
+        }
+        v.pointer("energyField", energyField);
+    }
+    // SAFETY: guaranteed by the caller.
+    unsafe { probe_batch_get_energy_field(probeBatch, identifier, probeIndex, energyField) }
+}
+
+/// [`iplProbeBatchGetEnergyField`] without validation.
+///
+/// # Safety
+///
+/// As [`iplProbeBatchGetEnergyField`].
+unsafe fn probe_batch_get_energy_field(
     probeBatch: IPLProbeBatch,
     identifier: *mut IPLBakedDataIdentifier,
     probeIndex: IPLint32,
@@ -418,6 +608,30 @@ pub unsafe extern "system" fn iplProbeBatchGetEnergyField(
 /// of 3 floats.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn iplProbeBatchGetReverb(
+    probeBatch: IPLProbeBatch,
+    identifier: *mut IPLBakedDataIdentifier,
+    probeIndex: IPLint32,
+    reverbTimes: *mut IPLfloat32,
+) {
+    // SAFETY: guaranteed by the caller.
+    if let Some(v) = unsafe { validator::<ProbeBatchObject, _>(probeBatch, "getReverb") } {
+        // SAFETY: guaranteed by the caller.
+        unsafe {
+            validate_identifier(v, identifier);
+            validate_probe_index(v, "probeIndex", probeIndex, probeBatch);
+        }
+        v.pointer("reverbTimes", reverbTimes);
+    }
+    // SAFETY: guaranteed by the caller.
+    unsafe { probe_batch_get_reverb(probeBatch, identifier, probeIndex, reverbTimes) }
+}
+
+/// [`iplProbeBatchGetReverb`] without validation.
+///
+/// # Safety
+///
+/// As [`iplProbeBatchGetReverb`].
+unsafe fn probe_batch_get_reverb(
     probeBatch: IPLProbeBatch,
     identifier: *mut IPLBakedDataIdentifier,
     probeIndex: IPLint32,

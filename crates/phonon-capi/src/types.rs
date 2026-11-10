@@ -858,6 +858,65 @@ pub struct IPLSimulationOutputs {
 }
 
 // --------------------------------------------------------------------------------------------------------------------
+// Devices (Embree, OpenCL, Radeon Rays, TrueAudio Next: out of scope, their functions report failure)
+// --------------------------------------------------------------------------------------------------------------------
+
+/// `phonon.h` declares it as a struct with one reserved byte in C++ and as `void` in C.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct IPLEmbreeDeviceSettings {
+    pub reserved: IPLbyte,
+}
+
+pub type IPLOpenCLDeviceType = i32;
+pub const IPL_OPENCLDEVICETYPE_ANY: IPLOpenCLDeviceType = 0;
+pub const IPL_OPENCLDEVICETYPE_CPU: IPLOpenCLDeviceType = 1;
+pub const IPL_OPENCLDEVICETYPE_GPU: IPLOpenCLDeviceType = 2;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct IPLOpenCLDeviceSettings {
+    pub r#type: IPLOpenCLDeviceType,
+    pub numCUsToReserve: IPLint32,
+    pub fractionCUsForIRUpdate: IPLfloat32,
+    pub requiresTAN: IPLbool,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct IPLOpenCLDeviceDesc {
+    pub platform: *mut c_void,
+    pub platformName: IPLstring,
+    pub platformVendor: IPLstring,
+    pub platformVersion: IPLstring,
+    pub device: *mut c_void,
+    pub deviceName: IPLstring,
+    pub deviceVendor: IPLstring,
+    pub deviceVersion: IPLstring,
+    pub r#type: IPLOpenCLDeviceType,
+    pub numConvolutionCUs: IPLint32,
+    pub numIRUpdateCUs: IPLint32,
+    pub granularity: IPLint32,
+    pub perfScore: IPLfloat32,
+}
+
+/// `phonon.h` declares it as a struct with one reserved byte in C++ and as `void` in C.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct IPLRadeonRaysDeviceSettings {
+    pub reserved: IPLbyte,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct IPLTrueAudioNextDeviceSettings {
+    pub frameSize: IPLint32,
+    pub irSize: IPLint32,
+    pub order: IPLint32,
+    pub maxSources: IPLint32,
+}
+
+// --------------------------------------------------------------------------------------------------------------------
 // Opaque handles
 // --------------------------------------------------------------------------------------------------------------------
 
@@ -889,6 +948,7 @@ opaque_handles! {
     IPLAmbisonicsDecodeEffect => _IPLAmbisonicsDecodeEffect_t;
     IPLDirectEffect => _IPLDirectEffect_t;
     IPLEmbreeDevice => _IPLEmbreeDevice_t;
+    IPLOpenCLDeviceList => _IPLOpenCLDeviceList_t;
     IPLOpenCLDevice => _IPLOpenCLDevice_t;
     IPLRadeonRaysDevice => _IPLRadeonRaysDevice_t;
     IPLScene => _IPLScene_t;

@@ -31,12 +31,18 @@ use steam_audio::simulation::{
 use steam_audio::triple_buffer::TripleBufferReader;
 
 use crate::context::{Context, context_arc};
-use crate::handle::{Handle, lock, object, retain_release};
+use crate::handle::{Handle, lock, object, retain_release, validator};
 use crate::models::{UserData, air_absorption_model, directivity};
 use crate::probes::{ProbeBatchObject, from_ipl_identifier};
 use crate::rand::with_rand;
 use crate::scene::scene_arc;
 use crate::types::*;
+use crate::validation::{
+    Validator, air_absorption_model as validate_air_absorption_model, baked_data_identifier,
+    coordinate_space3, direct_effect_params, directivity as validate_directivity,
+    distance_attenuation_model as validate_distance_attenuation_model, path_effect_params,
+    reflection_effect_params,
+};
 use crate::{from_ipl_coordinate_space, guard, to_ipl_vector};
 
 // --------------------------------------------------------------------------------------------------------------------
@@ -88,6 +94,200 @@ unsafe fn simulator_ref<'a>(simulator: IPLSimulator) -> Option<&'a Handle<Simula
 unsafe fn source_ref<'a>(source: IPLSource) -> Option<&'a Handle<SourceObject>> {
     // SAFETY: guaranteed by the caller.
     unsafe { Handle::<SourceObject>::from_raw(source) }
+}
+
+const ALL_SIMULATION_FLAGS: IPLSimulationFlags =
+    IPL_SIMULATIONFLAGS_DIRECT | IPL_SIMULATIONFLAGS_REFLECTIONS | IPL_SIMULATIONFLAGS_PATHING;
+
+/// `VALIDATE_IPLSimulationFlags(<name>)`.
+fn validate_flags(v: Validator, name: &str, flags: IPLSimulationFlags) {
+    v.flags("IPLSimulationFlags", name, flags, ALL_SIMULATION_FLAGS);
+}
+
+/// `VALIDATE_IPLSimulationSettings(settings)`.
+///
+/// # Safety
+///
+/// `settings` is null or valid.
+unsafe fn validate_simulation_settings(v: Validator, settings: *const IPLSimulationSettings) {
+    if !v.pointer("settings", settings) {
+        return;
+    }
+    // SAFETY: not null; valid as guaranteed by the caller.
+    let s = unsafe { &*settings };
+    validate_flags(v, "settings->flags", s.flags);
+    v.range(
+        "IPLSceneType",
+        "settings->sceneType",
+        s.sceneType,
+        IPL_SCENETYPE_DEFAULT,
+        IPL_SCENETYPE_CUSTOM,
+    );
+    v.range(
+        "IPLReflectionEffectType",
+        "settings->reflectionType",
+        s.reflectionType,
+        IPL_REFLECTIONEFFECTTYPE_CONVOLUTION,
+        IPL_REFLECTIONEFFECTTYPE_TAN,
+    );
+    v.int(
+        "settings->maxNumOcclusionSamples",
+        s.maxNumOcclusionSamples,
+        s.maxNumOcclusionSamples > 0,
+    );
+    v.int("settings->maxNumRays", s.maxNumRays, s.maxNumRays > 0);
+    v.int(
+        "settings->numDiffuseSamples",
+        s.numDiffuseSamples,
+        s.numDiffuseSamples > 0,
+    );
+    v.float_if("settings->maxDuration", s.maxDuration, s.maxDuration > 0.0);
+    v.int("settings->maxOrder", s.maxOrder, s.maxOrder >= 0);
+    v.int(
+        "settings->maxNumSources",
+        s.maxNumSources,
+        s.maxNumSources > 0,
+    );
+    v.int("settings->numThreads", s.numThreads, s.numThreads > 0);
+    if s.sceneType == IPL_SCENETYPE_CUSTOM {
+        v.int("settings->rayBatchSize", s.rayBatchSize, s.rayBatchSize > 0);
+    }
+    v.int(
+        "settings->numVisSamples",
+        s.numVisSamples,
+        s.numVisSamples > 0,
+    );
+    v.int("settings->samplingRate", s.samplingRate, s.samplingRate > 0);
+    v.int("settings->frameSize", s.frameSize, s.frameSize > 0);
+    let radeon_rays = s.sceneType == IPL_SCENETYPE_RADEONRAYS;
+    let tan = s.reflectionType == IPL_REFLECTIONEFFECTTYPE_TAN;
+    if radeon_rays || tan {
+        v.pointer("settings->openCLDevice", s.openCLDevice);
+        if radeon_rays {
+            v.pointer("settings->radeonRaysDevice", s.radeonRaysDevice);
+        }
+        if tan {
+            v.pointer("settings->tanDevice", s.tanDevice);
+        }
+    }
+}
+
+/// `VALIDATE_IPLSimulationInputs(inputs)`. `deviationModel` is read for callers of API version 4.7 or later, which
+/// have the field (upstream reads it whatever the caller's version).
+///
+/// # Safety
+///
+/// `inputs` is null or valid, with a `deviationModel` that is null or valid.
+unsafe fn validate_simulation_inputs(
+    v: Validator,
+    inputs: *const IPLSimulationInputs,
+    has_deviation_model: bool,
+) {
+    if !v.pointer("inputs", inputs) {
+        return;
+    }
+    // SAFETY: not null; valid as guaranteed by the caller.
+    let i = unsafe { &*inputs };
+    validate_flags(v, "inputs->flags", i.flags);
+    coordinate_space3!(v, i.source, "inputs->source");
+    if has_flag(i.flags, IPL_SIMULATIONFLAGS_DIRECT) {
+        v.flags(
+            "IPLDirectSimulationFlags",
+            "inputs->directFlags",
+            i.directFlags,
+            IPL_DIRECTSIMULATIONFLAGS_DISTANCEATTENUATION
+                | IPL_DIRECTSIMULATIONFLAGS_AIRABSORPTION
+                | IPL_DIRECTSIMULATIONFLAGS_DIRECTIVITY
+                | IPL_DIRECTSIMULATIONFLAGS_OCCLUSION
+                | IPL_DIRECTSIMULATIONFLAGS_TRANSMISSION,
+        );
+        validate_distance_attenuation_model!(
+            v,
+            &i.distanceAttenuationModel,
+            "(&inputs->distanceAttenuationModel)"
+        );
+        validate_air_absorption_model!(v, &i.airAbsorptionModel, "(&inputs->airAbsorptionModel)");
+        validate_directivity!(v, &i.directivity, "(&inputs->directivity)");
+        let deviation = if has_deviation_model {
+            i.deviationModel.cast_const()
+        } else {
+            std::ptr::null()
+        };
+        // SAFETY: guaranteed by the caller.
+        if let Some(model) = unsafe { deviation.as_ref() } {
+            v.range(
+                "IPLDeviationModelType",
+                "(inputs->deviationModel)->type",
+                model.r#type,
+                IPL_DEVIATIONTYPE_DEFAULT,
+                IPL_DEVIATIONTYPE_CALLBACK,
+            );
+            // Upstream compares with IPL_AIRABSORPTIONTYPE_CALLBACK (2), so a callback deviation model is never
+            // checked for its callback.
+            if model.r#type == IPL_AIRABSORPTIONTYPE_CALLBACK {
+                v.pointer(
+                    "(inputs->deviationModel)->callback",
+                    model.callback.map_or(std::ptr::null(), |f| f as *const ()),
+                );
+            }
+        }
+        v.range(
+            "IPLOcclusionType",
+            "inputs->occlusionType",
+            i.occlusionType,
+            IPL_OCCLUSIONTYPE_RAYCAST,
+            IPL_OCCLUSIONTYPE_VOLUMETRIC,
+        );
+        v.float_if(
+            "inputs->occlusionRadius",
+            i.occlusionRadius,
+            i.occlusionRadius > 0.0,
+        );
+        v.int(
+            "inputs->numOcclusionSamples",
+            i.numOcclusionSamples,
+            i.numOcclusionSamples > 0,
+        );
+        v.int(
+            "inputs->numTransmissionRays",
+            i.numTransmissionRays,
+            i.numTransmissionRays > 0,
+        );
+    }
+    if i.flags & (IPL_SIMULATIONFLAGS_REFLECTIONS | IPL_SIMULATIONFLAGS_PATHING) != 0 {
+        v.bool("inputs->baked", i.baked);
+        if i.baked != IPL_FALSE {
+            baked_data_identifier!(v, i.bakedDataIdentifier, "inputs->bakedDataIdentifier");
+        }
+        if has_flag(i.flags, IPL_SIMULATIONFLAGS_REFLECTIONS) {
+            for &x in &i.reverbScale {
+                v.float_if("inputs->reverbScale[iBand]", x, x > 0.0);
+            }
+            v.float_if(
+                "inputs->hybridReverbTransitionTime",
+                i.hybridReverbTransitionTime,
+                i.hybridReverbTransitionTime > 0.0,
+            );
+            v.float_if(
+                "inputs->hybridReverbOverlapPercent",
+                i.hybridReverbOverlapPercent,
+                0.0 < i.hybridReverbOverlapPercent && i.hybridReverbOverlapPercent <= 1.0,
+            );
+        }
+        if has_flag(i.flags, IPL_SIMULATIONFLAGS_PATHING) {
+            v.pointer("inputs->pathingProbes", i.pathingProbes);
+            v.float_if("inputs->visRadius", i.visRadius, i.visRadius >= 0.0);
+            v.float_if(
+                "inputs->visThreshold",
+                i.visThreshold,
+                i.visThreshold >= 0.0,
+            );
+            v.float_if("inputs->visRange", i.visRange, i.visRange >= 0.0);
+            v.int("inputs->pathingOrder", i.pathingOrder, i.pathingOrder >= 0);
+            v.bool("inputs->enableValidation", i.enableValidation);
+            v.bool("inputs->findAlternatePaths", i.findAlternatePaths);
+        }
+    }
 }
 
 fn has_flag(flags: IPLSimulationFlags, flag: IPLSimulationFlags) -> bool {
@@ -192,6 +392,11 @@ pub unsafe extern "system" fn iplSimulatorCreate(
         let Some(context) = (unsafe { context_arc(context) }) else {
             return IPL_STATUS_FAILURE;
         };
+        if let Some(v) = context.validator("createSimulator") {
+            // SAFETY: guaranteed by the caller.
+            unsafe { validate_simulation_settings(v, settings) };
+            v.pointer("simulator", simulator);
+        }
         // SAFETY: guaranteed by the caller.
         let (Some(settings), Some(out)) =
             (unsafe { settings.as_ref() }, unsafe { simulator.as_mut() })
@@ -231,6 +436,10 @@ retain_release!(
 pub unsafe extern "system" fn iplSimulatorSetScene(simulator: IPLSimulator, scene: IPLScene) {
     guard((), || {
         // SAFETY: guaranteed by the caller.
+        if let Some(v) = unsafe { validator::<SimulatorObject, _>(simulator, "setScene") } {
+            v.pointer("scene", scene);
+        }
+        // SAFETY: guaranteed by the caller.
         let (Some(simulator), Some(scene)) = (unsafe { simulator_ref(simulator) }, unsafe {
             scene_arc(scene)
         }) else {
@@ -254,6 +463,10 @@ pub unsafe extern "system" fn iplSimulatorAddProbeBatch(
     probeBatch: IPLProbeBatch,
 ) {
     guard((), || {
+        // SAFETY: guaranteed by the caller.
+        if let Some(v) = unsafe { validator::<SimulatorObject, _>(simulator, "addProbeBatch") } {
+            v.pointer("probeBatch", probeBatch);
+        }
         // SAFETY: guaranteed by the caller.
         let (Some(simulator), Some(object)) = (unsafe { simulator_ref(simulator) }, unsafe {
             object::<ProbeBatchObject, _>(probeBatch)
@@ -287,6 +500,10 @@ pub unsafe extern "system" fn iplSimulatorRemoveProbeBatch(
     probeBatch: IPLProbeBatch,
 ) {
     guard((), || {
+        // SAFETY: guaranteed by the caller.
+        if let Some(v) = unsafe { validator::<SimulatorObject, _>(simulator, "removeProbeBatch") } {
+            v.pointer("probeBatch", probeBatch);
+        }
         // SAFETY: guaranteed by the caller.
         let (Some(simulator), Some(object)) = (unsafe { simulator_ref(simulator) }, unsafe {
             object::<ProbeBatchObject, _>(probeBatch)
@@ -326,6 +543,34 @@ pub unsafe extern "system" fn iplSimulatorSetSharedInputs(
     sharedInputs: *mut IPLSimulationSharedInputs,
 ) {
     guard((), || {
+        // SAFETY: guaranteed by the caller.
+        if let Some(v) = unsafe { validator::<SimulatorObject, _>(simulator, "setSharedInputs") } {
+            validate_flags(v, "flags", flags);
+            if v.pointer("sharedInputs", sharedInputs) {
+                // SAFETY: not null; valid as guaranteed by the caller.
+                let shared = unsafe { &*sharedInputs };
+                coordinate_space3!(v, shared.listener, "sharedInputs->listener");
+                if has_flag(flags, IPL_SIMULATIONFLAGS_REFLECTIONS) {
+                    v.int("sharedInputs->numRays", shared.numRays, shared.numRays > 0);
+                    v.int(
+                        "sharedInputs->numBounces",
+                        shared.numBounces,
+                        shared.numBounces > 0,
+                    );
+                    v.float_if(
+                        "sharedInputs->duration",
+                        shared.duration,
+                        shared.duration > 0.0,
+                    );
+                    v.int("sharedInputs->order", shared.order, shared.order >= 0);
+                    v.float_if(
+                        "sharedInputs->irradianceMinDistance",
+                        shared.irradianceMinDistance,
+                        shared.irradianceMinDistance > 0.0,
+                    );
+                }
+            }
+        }
         // SAFETY: guaranteed by the caller.
         let (Some(handle), Some(shared)) = (unsafe { simulator_ref(simulator) }, unsafe {
             sharedInputs.as_ref()
@@ -482,6 +727,14 @@ pub unsafe extern "system" fn iplSourceCreate(
 ) -> IPLerror {
     guard(IPL_STATUS_FAILURE, || {
         // SAFETY: guaranteed by the caller.
+        if let Some(v) = unsafe { validator::<SimulatorObject, _>(simulator, "createSource") } {
+            if v.pointer("settings", settings) {
+                // SAFETY: not null; valid as guaranteed by the caller.
+                validate_flags(v, "settings->flags", unsafe { (*settings).flags });
+            }
+            v.pointer("source", source);
+        }
+        // SAFETY: guaranteed by the caller.
         let (Some(handle), Some(settings), Some(out)) = (
             unsafe { simulator_ref(simulator) },
             unsafe { settings.as_ref() },
@@ -539,6 +792,10 @@ retain_release!(IPLSource, SourceObject, iplSourceRetain, iplSourceRelease);
 pub unsafe extern "system" fn iplSourceAdd(source: IPLSource, simulator: IPLSimulator) {
     guard((), || {
         // SAFETY: guaranteed by the caller.
+        if let Some(v) = unsafe { validator::<SourceObject, _>(source, "add") } {
+            v.pointer("simulator", simulator);
+        }
+        // SAFETY: guaranteed by the caller.
         let (Some(source), Some(simulator)) = (unsafe { source_ref(source) }, unsafe {
             simulator_ref(simulator)
         }) else {
@@ -556,6 +813,10 @@ pub unsafe extern "system" fn iplSourceAdd(source: IPLSource, simulator: IPLSimu
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn iplSourceRemove(source: IPLSource, simulator: IPLSimulator) {
     guard((), || {
+        // SAFETY: guaranteed by the caller.
+        if let Some(v) = unsafe { validator::<SourceObject, _>(source, "remove") } {
+            v.pointer("simulator", simulator);
+        }
         // SAFETY: guaranteed by the caller.
         let (Some(source), Some(simulator)) = (unsafe { source_ref(source) }, unsafe {
             simulator_ref(simulator)
@@ -646,6 +907,16 @@ pub unsafe extern "system" fn iplSourceSetInputs(
     inputs: *mut IPLSimulationInputs,
 ) {
     guard((), || {
+        // SAFETY: guaranteed by the caller.
+        if let Some(v) = unsafe { validator::<SourceObject, _>(source, "setInputs") } {
+            // SAFETY: guaranteed by the caller.
+            let at_least_4_7 = unsafe { source_ref(source) }
+                .and_then(Handle::context)
+                .is_some_and(|c| c.is_caller_api_version_at_least(4, 7));
+            validate_flags(v, "flags", flags);
+            // SAFETY: guaranteed by the caller.
+            unsafe { validate_simulation_inputs(v, inputs, at_least_4_7) };
+        }
         // SAFETY: guaranteed by the caller.
         let (Some(handle), Some(inputs)) =
             (unsafe { source_ref(source) }, unsafe { inputs.as_ref() })
@@ -763,6 +1034,49 @@ pub unsafe extern "system" fn iplSourceSetInputs(
 /// `source` is null or a live source, and `outputs` is null or valid.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn iplSourceGetOutputs(
+    source: IPLSource,
+    flags: IPLSimulationFlags,
+    outputs: *mut IPLSimulationOutputs,
+) {
+    // SAFETY: guaranteed by the caller.
+    let v = unsafe { validator::<SourceObject, _>(source, "getOutputs") };
+    if let Some(v) = v {
+        validate_flags(v, "flags", flags);
+        v.pointer("outputs", outputs);
+    }
+    // SAFETY: guaranteed by the caller.
+    unsafe { get_outputs(source, flags, outputs) };
+    if let Some(v) = v {
+        // SAFETY: guaranteed by the caller.
+        let (Some(object), Some(out)) =
+            (unsafe { source_ref(source) }, unsafe { outputs.as_ref() })
+        else {
+            v.pointer("outputs", outputs);
+            return;
+        };
+        if has_flag(flags, IPL_SIMULATIONFLAGS_DIRECT) {
+            direct_effect_params!(v, &out.direct, "(&outputs->direct)");
+        }
+        if has_flag(flags, IPL_SIMULATIONFLAGS_REFLECTIONS) {
+            reflection_effect_params!(v, &out.reflections, "(&outputs->reflections)");
+        }
+        if has_flag(flags, IPL_SIMULATIONFLAGS_PATHING) {
+            // The caller's order picks how many coefficients upstream reads from the source's array; it is limited to
+            // the array here.
+            let mut pathing = out.pathing;
+            let max_order = i32::try_from(object.get().max_order).unwrap_or(i32::MAX);
+            pathing.order = pathing.order.min(max_order);
+            path_effect_params!(v, &pathing, "(&outputs->pathing)");
+        }
+    }
+}
+
+/// [`iplSourceGetOutputs`] without validation.
+///
+/// # Safety
+///
+/// As [`iplSourceGetOutputs`].
+unsafe fn get_outputs(
     source: IPLSource,
     flags: IPLSimulationFlags,
     outputs: *mut IPLSimulationOutputs,

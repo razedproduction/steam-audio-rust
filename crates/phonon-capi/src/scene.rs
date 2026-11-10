@@ -19,9 +19,10 @@ use steam_audio::scene::{
 use steam_audio::simulation::SimulationScene;
 
 use crate::context::context_arc;
-use crate::handle::{Handle, lock, object, read, retain_release, write};
+use crate::handle::{Handle, lock, object, read, retain_release, validator, write};
 use crate::serialized_object::{store_serialized_bytes, with_serialized_bytes};
 use crate::types::*;
+use crate::validation::{Validator, matrix4x4, vector3};
 use crate::{c_path, from_ipl_matrix, from_ipl_vector, guard, to_ipl_vector};
 
 // --------------------------------------------------------------------------------------------------------------------
@@ -142,6 +143,120 @@ impl DefaultScene {
 }
 
 pub(crate) type SceneHandle = Handle<SceneObject>;
+
+/// `VALIDATE_IPLSceneSettings(settings)`.
+///
+/// # Safety
+///
+/// `settings` is null or valid.
+unsafe fn validate_scene_settings(v: Validator, settings: *const IPLSceneSettings) {
+    if !v.pointer("settings", settings) {
+        return;
+    }
+    // SAFETY: not null; valid as guaranteed by the caller.
+    let s = unsafe { &*settings };
+    v.range(
+        "IPLSceneType",
+        "settings->type",
+        s.r#type,
+        IPL_SCENETYPE_DEFAULT,
+        IPL_SCENETYPE_CUSTOM,
+    );
+    match s.r#type {
+        IPL_SCENETYPE_CUSTOM => {
+            v.pointer(
+                "settings->closestHitCallback",
+                s.closestHitCallback
+                    .map_or(std::ptr::null(), |f| f as *const ()),
+            );
+            v.pointer(
+                "settings->anyHitCallback",
+                s.anyHitCallback
+                    .map_or(std::ptr::null(), |f| f as *const ()),
+            );
+        }
+        IPL_SCENETYPE_EMBREE => {
+            v.pointer("settings->embreeDevice", s.embreeDevice);
+        }
+        IPL_SCENETYPE_RADEONRAYS => {
+            v.pointer("settings->radeonRaysDevice", s.radeonRaysDevice);
+        }
+        _ => {}
+    }
+}
+
+/// `VALIDATE_IPLStaticMeshSettings(settings)`. Upstream loops over the arrays even when their pointers are null; the
+/// port skips a null array.
+///
+/// # Safety
+///
+/// `settings` is null or valid, and its non-null arrays hold their counts.
+unsafe fn validate_static_mesh_settings(v: Validator, settings: *const IPLStaticMeshSettings) {
+    if !v.pointer("settings", settings) {
+        return;
+    }
+    // SAFETY: not null; valid as guaranteed by the caller.
+    let s = unsafe { &*settings };
+    v.int("settings->numVertices", s.numVertices, s.numVertices > 0);
+    v.int("settings->numTriangles", s.numTriangles, s.numTriangles > 0);
+    v.int("settings->numMaterials", s.numMaterials, s.numMaterials > 0);
+    v.pointer("settings->vertices", s.vertices);
+    v.pointer("settings->triangles", s.triangles);
+    v.pointer("settings->materialIndices", s.materialIndices);
+    v.pointer("settings->materials", s.materials);
+    let count = |n: i32| usize::try_from(n).unwrap_or(0);
+    if !s.vertices.is_null() {
+        for i in 0..count(s.numVertices) {
+            // SAFETY: guaranteed by the caller.
+            let vertex = unsafe { *s.vertices.add(i) };
+            vector3!(v, vertex, "settings->vertices[iVertex]");
+        }
+    }
+    if !s.triangles.is_null() && !s.materialIndices.is_null() {
+        for i in 0..count(s.numTriangles) {
+            // SAFETY: guaranteed by the caller.
+            let triangle = unsafe { *s.triangles.add(i) };
+            for index in triangle.indices {
+                v.int(
+                    "settings->triangles[iTriangle].indices[iTriangleVertex]",
+                    index,
+                    0 <= index && index < s.numVertices,
+                );
+            }
+            // SAFETY: guaranteed by the caller.
+            let material = unsafe { *s.materialIndices.add(i) };
+            v.int(
+                "settings->materialIndices[iTriangle]",
+                material,
+                0 <= material && material < s.numMaterials,
+            );
+        }
+    }
+    if !s.materials.is_null() {
+        let unit = |x: f32| (0.0..=1.0).contains(&x);
+        for i in 0..count(s.numMaterials) {
+            // SAFETY: guaranteed by the caller.
+            let m = unsafe { *s.materials.add(i) };
+            for band in 0..m.absorption.len() {
+                v.float_if(
+                    "settings->materials[iMaterial].absorption[iBand]",
+                    m.absorption[band],
+                    unit(m.absorption[band]),
+                );
+                v.float_if(
+                    "settings->materials[iMaterial].transmission[iBand]",
+                    m.transmission[band],
+                    unit(m.transmission[band]),
+                );
+            }
+            v.float_if(
+                "settings->materials[iMaterial].scattering",
+                m.scattering,
+                unit(m.scattering),
+            );
+        }
+    }
+}
 
 /// The scene behind a handle.
 ///
@@ -392,6 +507,11 @@ pub unsafe extern "system" fn iplSceneCreate(
         let Some(context) = (unsafe { context_arc(context) }) else {
             return IPL_STATUS_FAILURE;
         };
+        if let Some(v) = context.validator("createScene") {
+            // SAFETY: guaranteed by the caller.
+            unsafe { validate_scene_settings(v, settings) };
+            v.pointer("scene", scene);
+        }
         // SAFETY: guaranteed by the caller.
         let (Some(settings), Some(out)) = (unsafe { settings.as_ref() }, unsafe { scene.as_mut() })
         else {
@@ -441,6 +561,12 @@ pub unsafe extern "system" fn iplSceneLoad(
         let Some(context) = (unsafe { context_arc(context) }) else {
             return IPL_STATUS_FAILURE;
         };
+        if let Some(v) = context.validator("loadScene") {
+            // SAFETY: guaranteed by the caller.
+            unsafe { validate_scene_settings(v, settings) };
+            v.pointer("serializedObject", serializedObject);
+            v.pointer("scene", scene);
+        }
         // SAFETY: guaranteed by the caller.
         let (Some(settings), Some(out)) = (unsafe { settings.as_ref() }, unsafe { scene.as_mut() })
         else {
@@ -475,6 +601,10 @@ pub unsafe extern "system" fn iplSceneLoad(
 pub unsafe extern "system" fn iplSceneSave(scene: IPLScene, serializedObject: IPLSerializedObject) {
     guard((), || {
         // SAFETY: guaranteed by the caller.
+        if let Some(v) = unsafe { validator::<SceneObject, _>(scene, "save") } {
+            v.pointer("serializedObject", serializedObject);
+        }
+        // SAFETY: guaranteed by the caller.
         let Some(scene) = (unsafe { scene_arc(scene) }) else {
             return;
         };
@@ -495,6 +625,10 @@ pub unsafe extern "system" fn iplSceneSave(scene: IPLScene, serializedObject: IP
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn iplSceneSaveOBJ(scene: IPLScene, fileBaseName: IPLstring) {
     guard((), || {
+        // SAFETY: guaranteed by the caller.
+        if let Some(v) = unsafe { validator::<SceneObject, _>(scene, "saveOBJ") } {
+            v.pointer("fileBaseName", fileBaseName);
+        }
         // SAFETY: guaranteed by the caller.
         let Some(scene) = (unsafe { scene_arc(scene) }) else {
             return;
@@ -628,6 +762,14 @@ pub unsafe extern "system" fn iplStaticMeshCreate(
         let Some(parent) = (unsafe { parent(scene) }) else {
             return IPL_STATUS_FAILURE;
         };
+        if let Some(v) = parent
+            .context()
+            .and_then(|c| c.validator("createStaticMesh"))
+        {
+            // SAFETY: guaranteed by the caller.
+            unsafe { validate_static_mesh_settings(v, settings) };
+            v.pointer("staticMesh", staticMesh);
+        }
         // SAFETY: guaranteed by the caller.
         let (Some(settings), Some(out)) =
             (unsafe { settings.as_ref() }, unsafe { staticMesh.as_mut() })
@@ -682,6 +824,10 @@ pub unsafe extern "system" fn iplStaticMeshLoad(
         let Some(parent) = (unsafe { parent(scene) }) else {
             return IPL_STATUS_FAILURE;
         };
+        if let Some(v) = parent.context().and_then(|c| c.validator("loadStaticMesh")) {
+            v.pointer("serializedObject", serializedObject);
+            v.pointer("staticMesh", staticMesh);
+        }
         // SAFETY: guaranteed by the caller.
         let Some(out) = (unsafe { staticMesh.as_mut() }) else {
             return IPL_STATUS_FAILURE;
@@ -751,6 +897,10 @@ pub unsafe extern "system" fn iplStaticMeshSave(
 ) {
     guard((), || {
         // SAFETY: guaranteed by the caller.
+        if let Some(v) = unsafe { validator::<StaticMeshObject, _>(staticMesh, "save") } {
+            v.pointer("serializedObject", serializedObject);
+        }
+        // SAFETY: guaranteed by the caller.
         let Some((default, _, id)) = (unsafe { static_mesh_ref(staticMesh) }) else {
             return;
         };
@@ -773,6 +923,10 @@ pub unsafe extern "system" fn iplStaticMeshSave(
 pub unsafe extern "system" fn iplStaticMeshAdd(staticMesh: IPLStaticMesh, scene: IPLScene) {
     guard((), || {
         // SAFETY: guaranteed by the caller.
+        if let Some(v) = unsafe { validator::<StaticMeshObject, _>(staticMesh, "add") } {
+            v.pointer("scene", scene);
+        }
+        // SAFETY: guaranteed by the caller.
         if let Some((default, id)) = unsafe { static_mesh_in(staticMesh, scene) } {
             default.update(|s| s.add_static_mesh(id));
         }
@@ -787,6 +941,10 @@ pub unsafe extern "system" fn iplStaticMeshAdd(staticMesh: IPLStaticMesh, scene:
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn iplStaticMeshRemove(staticMesh: IPLStaticMesh, scene: IPLScene) {
     guard((), || {
+        // SAFETY: guaranteed by the caller.
+        if let Some(v) = unsafe { validator::<StaticMeshObject, _>(staticMesh, "remove") } {
+            v.pointer("scene", scene);
+        }
         // SAFETY: guaranteed by the caller.
         if let Some((default, id)) = unsafe { static_mesh_in(staticMesh, scene) } {
             default.update(|s| s.remove_static_mesh(id));
@@ -862,6 +1020,18 @@ pub unsafe extern "system" fn iplInstancedMeshCreate(
         let Some(parent) = (unsafe { parent(scene) }) else {
             return IPL_STATUS_FAILURE;
         };
+        if let Some(v) = parent
+            .context()
+            .and_then(|c| c.validator("createInstancedMesh"))
+        {
+            if v.pointer("settings", settings) {
+                // SAFETY: not null; valid as guaranteed by the caller.
+                let s = unsafe { &*settings };
+                v.pointer("settings->subScene", s.subScene);
+                matrix4x4!(v, s.transform, "settings->transform");
+            }
+            v.pointer("instancedMesh", instancedMesh);
+        }
         // SAFETY: guaranteed by the caller.
         let (Some(settings), Some(out)) = (unsafe { settings.as_ref() }, unsafe {
             instancedMesh.as_mut()
@@ -927,6 +1097,10 @@ pub unsafe extern "system" fn iplInstancedMeshAdd(
 ) {
     guard((), || {
         // SAFETY: guaranteed by the caller.
+        if let Some(v) = unsafe { validator::<InstancedMeshObject, _>(instancedMesh, "add") } {
+            v.pointer("scene", scene);
+        }
+        // SAFETY: guaranteed by the caller.
         if let Some((default, id)) = unsafe { instanced_mesh_in(instancedMesh, scene) } {
             default.update(|s| s.add_instanced_mesh(id));
         }
@@ -944,6 +1118,10 @@ pub unsafe extern "system" fn iplInstancedMeshRemove(
     scene: IPLScene,
 ) {
     guard((), || {
+        // SAFETY: guaranteed by the caller.
+        if let Some(v) = unsafe { validator::<InstancedMeshObject, _>(instancedMesh, "remove") } {
+            v.pointer("scene", scene);
+        }
         // SAFETY: guaranteed by the caller.
         if let Some((default, id)) = unsafe { instanced_mesh_in(instancedMesh, scene) } {
             default.update(|s| s.remove_instanced_mesh(id));
@@ -965,6 +1143,12 @@ pub unsafe extern "system" fn iplInstancedMeshUpdateTransform(
     transform: IPLMatrix4x4,
 ) {
     guard((), || {
+        // SAFETY: guaranteed by the caller.
+        let v = unsafe { validator::<InstancedMeshObject, _>(instancedMesh, "updateTransform") };
+        if let Some(v) = v {
+            v.pointer("scene", scene);
+            matrix4x4!(v, transform, "transform");
+        }
         if scene.is_null() {
             return;
         }

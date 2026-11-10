@@ -48,6 +48,25 @@ The `sofa`, `sofa_easy`, `sofa_hrtf_map` and `sofa_hrtf_database` generators rea
 and `scene` read `core/data/meshes/*.obj`, so run them from the repository root. `sofa` and `sofa_easy` also describe libmysofa's own test files, taken from `MYSOFA_TESTS_DIR` (default `core/deps-build/mysofa/src/mysofa/tests`,
 fetched by `fetch_deps.py`); without them they skip those cases, and so do the Rust tests.
 
+## sample_binaural (stage 8d)
+
+`golden.cmake` also builds upstream's `core/src/samples/sample_binaural.cpp`, unchanged, as `sample_binaural_upstream`
+(linked like upstream's samples) and, when `GOLDEN_PORT_PHONON_DIR` names the Cargo output directory holding the
+port's `phonon.dll` and `phonon.dll.lib`, as `sample_binaural_port` (only `phonon.h` and the import library).
+`run_sample.py` runs either on the `capi_sample` input:
+
+```bash
+build/reference/golden.exe testdata/golden capi_sample
+cmake --build build/reference --target sample_binaural_upstream
+python tools/golden/run_sample.py build/reference/sample_binaural_upstream.exe testdata/golden/capi_sample/input.npy testdata/golden/capi_sample/output.npy
+
+cargo build -p phonon-capi --release
+cmake build/reference -DGOLDEN_PORT_PHONON_DIR=<absolute path>/target/release
+cmake --build build/reference --target sample_binaural_port
+python tools/golden/run_sample.py build/reference/sample_binaural_port.exe testdata/golden/capi_sample/input.npy target/sample_binaural_port.npy
+SAMPLE_BINAURAL_PORT_OUTPUT=<absolute path>/target/sample_binaural_port.npy cargo test -p phonon-capi --test capi_sample -- --ignored
+```
+
 ## Adding a generator
 
 1. Create `src/<module>.cpp` with a function `void generate(const std::filesystem::path& out)`, and register it

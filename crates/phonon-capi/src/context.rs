@@ -7,6 +7,7 @@ use steam_audio::pathing::PathBaker;
 
 use crate::handle::{Handle, retain_release};
 use crate::types::*;
+use crate::validation::{Validator, vector3};
 use crate::{from_ipl_vector, guard, to_ipl_vector};
 
 /// What a context holds. Upstream keeps all of it in globals (`Context::sAPIVersion`, `sLog`, `sMemory`,
@@ -15,9 +16,11 @@ use crate::{from_ipl_vector, guard, to_ipl_vector};
 pub(crate) struct Context {
     /// The API version the caller was built against (`IPLContextSettings::version`).
     version: u32,
-    /// Accepted for compatibility; nothing is logged yet.
-    #[allow(dead_code)]
+    /// Where warnings go: upstream's global `sLog` takes the callback of the last context created; here each context
+    /// logs to its own.
     log_callback: IPLLogFunction,
+    /// Whether the context and its objects validate their calls (`IPL_CONTEXTFLAGS_VALIDATION`, API 4.5 and later).
+    validation: bool,
     /// Upstream's bakers are static functions with global cancel flags; here each context has its own.
     pub(crate) reflection_baker: ReflectionBaker,
     pub(crate) path_baker: PathBaker,
@@ -30,6 +33,12 @@ impl Context {
         let caller_major = (self.version >> 16) & 0xff;
         let caller_minor = (self.version >> 8) & 0xff;
         caller_major > major || (caller_major == major && caller_minor >= minor)
+    }
+
+    /// A validator for a call to upstream's method `method` on an object of this context, if the context validates.
+    pub(crate) fn validator(&self, method: &'static str) -> Option<Validator> {
+        self.validation
+            .then(|| Validator::new(self.log_callback, method))
     }
 }
 
@@ -44,7 +53,8 @@ fn is_version_compatible(version: u32) -> bool {
 /// Creates a context.
 ///
 /// The allocation callbacks are accepted but not used (Rust allocates through its global allocator), and the SIMD
-/// level and the validation flag are ignored (`DEVIATIONS.md`).
+/// level is ignored (`DEVIATIONS.md`). With `IPL_CONTEXTFLAGS_VALIDATION` (callers of API 4.5 or later), the settings
+/// are validated and the context and every object created from it validate their calls (`validation.rs`).
 ///
 /// # Safety
 ///
@@ -65,7 +75,38 @@ pub unsafe extern "system" fn iplContextCreate(
             return IPL_STATUS_FAILURE;
         }
 
+        let caller = Context {
+            version: settings.version,
+            log_callback: settings.logCallback,
+            validation: false,
+            reflection_baker: ReflectionBaker::new(),
+            path_baker: PathBaker::new(),
+        };
+        let validation = caller.is_caller_api_version_at_least(4, 5)
+            && settings.flags & IPL_CONTEXTFLAGS_VALIDATION != 0;
+        if validation {
+            // Upstream logs these through the global log before the new context sets its callback, so they reach the
+            // previous context's callback; here they reach the new one's.
+            let v = Validator::new(settings.logCallback, "createContext");
+            if settings.allocateCallback.is_some() {
+                v.pointer(
+                    "settings->freeCallback",
+                    settings
+                        .freeCallback
+                        .map_or(std::ptr::null(), |f| f as *const ()),
+                );
+            }
+            v.range(
+                "IPLSIMDLevel",
+                "settings->simdLevel",
+                settings.simdLevel,
+                IPL_SIMDLEVEL_SSE2,
+                IPL_SIMDLEVEL_AVX512,
+            );
+        }
+
         let value = Context {
+            validation,
             version: settings.version,
             log_callback: settings.logCallback,
             reflection_baker: ReflectionBaker::new(),
@@ -88,6 +129,20 @@ pub(crate) unsafe fn context_arc(context: IPLContext) -> Option<std::sync::Arc<C
     unsafe { Handle::<Context>::from_raw(context) }.map(|handle| handle.get().clone())
 }
 
+/// A validator for a call to upstream's method `method` on a context, if it is not null and validates.
+///
+/// # Safety
+///
+/// `context` is null or a live context.
+pub(crate) unsafe fn context_validator(
+    context: IPLContext,
+    method: &'static str,
+) -> Option<Validator> {
+    // SAFETY: guaranteed by the caller.
+    unsafe { Handle::<Context>::from_raw(context) }
+        .and_then(|handle| handle.get().validator(method))
+}
+
 /// The direction from the listener to the source in the listener's coordinate system: x right, y up, -z ahead.
 /// Returns +y (up) when the source is within 1e-5 of the listener, and a zero vector for a null context.
 ///
@@ -102,10 +157,31 @@ pub unsafe extern "system" fn iplCalculateRelativeDirection(
     listenerAhead: IPLVector3,
     listenerUp: IPLVector3,
 ) -> IPLVector3 {
-    if context.is_null() {
+    // SAFETY: guaranteed by the caller.
+    let Some(context) = (unsafe { context_arc(context) }) else {
         return IPLVector3::default();
+    };
+    let v = context.validator("calculateRelativeDirection");
+    if let Some(v) = v {
+        vector3!(v, sourcePosition, "sourcePosition");
+        vector3!(v, listenerPosition, "listenerPosition");
+        vector3!(v, listenerAhead, "listenerAhead");
+        vector3!(v, listenerUp, "listenerUp");
     }
 
+    let result = relative_direction(sourcePosition, listenerPosition, listenerAhead, listenerUp);
+    if let Some(v) = v {
+        vector3!(v, result, "result");
+    }
+    result
+}
+
+fn relative_direction(
+    sourcePosition: IPLVector3,
+    listenerPosition: IPLVector3,
+    listenerAhead: IPLVector3,
+    listenerUp: IPLVector3,
+) -> IPLVector3 {
     let source = from_ipl_vector(sourcePosition);
     let listener = from_ipl_vector(listenerPosition);
     let ahead = from_ipl_vector(listenerAhead);

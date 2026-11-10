@@ -89,6 +89,19 @@ pub unsafe extern "system" fn iplSerializedObjectCreate(
         let Some(context) = (unsafe { context_arc(context) }) else {
             return IPL_STATUS_FAILURE;
         };
+        if let Some(v) = context.validator("createSerializedObject") {
+            if v.pointer("settings", settings) {
+                // SAFETY: not null; valid as guaranteed by the caller.
+                let s = unsafe { &*settings };
+                v.check(
+                    "IPLbyte*",
+                    "settings->data",
+                    s.data,
+                    s.size == 0 || !s.data.is_null(),
+                );
+            }
+            v.pointer("serializedObject", serializedObject);
+        }
         // SAFETY: guaranteed by the caller.
         let (Some(settings), Some(out)) = (unsafe { settings.as_ref() }, unsafe {
             serializedObject.as_mut()

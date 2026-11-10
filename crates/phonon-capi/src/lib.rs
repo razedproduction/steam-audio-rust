@@ -9,7 +9,9 @@
 //!
 //! Stage 8a covers the context, serialized objects, audio buffers, HRTFs, the audio effects that do not need a
 //! simulator, and the direct-sound model functions; 8b scenes, energy fields, impulse responses, reconstructors, probes
-//! and baking; 8c the simulator and its sources, and the reflection and path effects.
+//! and baking; 8c the simulator and its sources, and the reflection and path effects; 8d the validation layer
+//! (`IPL_CONTEXTFLAGS_VALIDATION`) and the Embree, OpenCL, Radeon Rays and TrueAudio Next device functions, which fail
+//! as in an upstream build without those libraries.
 
 // The C ABI needs raw pointers and exported symbols; every unsafe block states why it is sound.
 #![allow(unsafe_code)]
@@ -21,6 +23,7 @@ mod audio_buffer;
 mod baking;
 mod buffer;
 mod context;
+mod devices;
 mod effects;
 mod energy_field;
 mod handle;
@@ -35,6 +38,7 @@ mod scene;
 mod serialized_object;
 mod simulator;
 pub mod types;
+mod validation;
 
 use std::ffi::CStr;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -48,6 +52,7 @@ pub use baking::*;
 pub use context::{
     iplCalculateRelativeDirection, iplContextCreate, iplContextRelease, iplContextRetain,
 };
+pub use devices::*;
 pub use effects::*;
 pub use energy_field::*;
 pub use hrtf::*;

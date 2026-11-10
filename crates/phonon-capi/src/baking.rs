@@ -16,12 +16,100 @@ use steam_audio::simulation::{
 };
 use steam_audio::thread_pool::ThreadPool;
 
-use crate::context::context_arc;
+use crate::context::{context_arc, context_validator};
 use crate::guard;
 use crate::handle::lock;
 use crate::probes::{from_ipl_identifier, probe_batch_ref};
 use crate::scene::scene_arc;
 use crate::types::*;
+use crate::validation::{Validator, baked_data_identifier};
+
+/// `VALIDATE_IPLReflectionsBakeParams(params)`.
+///
+/// # Safety
+///
+/// `params` is null or valid.
+unsafe fn validate_reflections_bake_params(v: Validator, params: *const IPLReflectionsBakeParams) {
+    if !v.pointer("params", params) {
+        return;
+    }
+    // SAFETY: not null; valid as guaranteed by the caller.
+    let p = unsafe { &*params };
+    v.pointer("params->scene", p.scene);
+    v.pointer("params->probeBatch", p.probeBatch);
+    v.range(
+        "IPLSceneType",
+        "params->sceneType",
+        p.sceneType,
+        IPL_SCENETYPE_DEFAULT,
+        IPL_SCENETYPE_CUSTOM,
+    );
+    baked_data_identifier!(v, p.identifier, "params->identifier");
+    v.flags(
+        "IPLReflectionsBakeFlags",
+        "params->bakeFlags",
+        p.bakeFlags,
+        IPL_REFLECTIONSBAKEFLAGS_BAKECONVOLUTION | IPL_REFLECTIONSBAKEFLAGS_BAKEPARAMETRIC,
+    );
+    v.int("params->numRays", p.numRays, p.numRays > 0);
+    v.int(
+        "params->numDiffuseSamples",
+        p.numDiffuseSamples,
+        p.numDiffuseSamples > 0,
+    );
+    v.int("params->numBounces", p.numBounces, p.numBounces > 0);
+    v.float_if(
+        "params->simulatedDuration",
+        p.simulatedDuration,
+        p.simulatedDuration > 0.0,
+    );
+    v.float_if(
+        "params->savedDuration",
+        p.savedDuration,
+        0.0 < p.savedDuration && p.savedDuration <= p.simulatedDuration,
+    );
+    v.int("params->order", p.order, p.order > 0);
+    v.int("params->numThreads", p.numThreads, p.numThreads > 0);
+    if p.sceneType == IPL_SCENETYPE_CUSTOM {
+        v.int("params->rayBatchSize", p.rayBatchSize, p.rayBatchSize > 0);
+    }
+    v.float_if(
+        "params->irradianceMinDistance",
+        p.irradianceMinDistance,
+        p.irradianceMinDistance > 0.0,
+    );
+    if p.sceneType == IPL_SCENETYPE_RADEONRAYS {
+        v.int(
+            "params->bakeBatchSize",
+            p.bakeBatchSize,
+            p.bakeBatchSize > 0,
+        );
+        v.pointer("params->openCLDevice", p.openCLDevice);
+        v.pointer("params->radeonRaysDevice", p.radeonRaysDevice);
+    }
+}
+
+/// `VALIDATE_IPLPathBakeParams(params)`.
+///
+/// # Safety
+///
+/// `params` is null or valid.
+unsafe fn validate_path_bake_params(v: Validator, params: *const IPLPathBakeParams) {
+    if !v.pointer("params", params) {
+        return;
+    }
+    // SAFETY: not null; valid as guaranteed by the caller.
+    let p = unsafe { &*params };
+    v.pointer("params->scene", p.scene);
+    v.pointer("params->probeBatch", p.probeBatch);
+    baked_data_identifier!(v, p.identifier, "params->identifier");
+    v.int("params->numSamples", p.numSamples, p.numSamples > 0);
+    v.float_if("params->radius", p.radius, p.radius > 0.0);
+    v.float_if("params->threshold", p.threshold, p.threshold > 0.0);
+    v.float_if("params->visRange", p.visRange, p.visRange > 0.0);
+    v.float_if("params->pathRange", p.pathRange, p.pathRange > 0.0);
+    v.int("params->numThreads", p.numThreads, p.numThreads > 0);
+}
 
 /// The seed of the reflection simulator's random number generators: the time in seconds, as upstream's
 /// `time(NULL)` (risk R2).
@@ -65,6 +153,26 @@ fn progress_reporter(callback: IPLProgressCallback, user_data: *mut c_void) -> i
 /// can be called with `userData`.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn iplReflectionsBakerBake(
+    context: IPLContext,
+    params: *mut IPLReflectionsBakeParams,
+    progressCallback: IPLProgressCallback,
+    userData: *mut c_void,
+) {
+    // SAFETY: guaranteed by the caller.
+    if let Some(v) = unsafe { context_validator(context, "bakeReflections") } {
+        // SAFETY: guaranteed by the caller.
+        unsafe { validate_reflections_bake_params(v, params) };
+    }
+    // SAFETY: guaranteed by the caller.
+    unsafe { bake_reflections(context, params, progressCallback, userData) }
+}
+
+/// [`iplReflectionsBakerBake`] without validation.
+///
+/// # Safety
+///
+/// As [`iplReflectionsBakerBake`].
+unsafe fn bake_reflections(
     context: IPLContext,
     params: *mut IPLReflectionsBakeParams,
     progressCallback: IPLProgressCallback,
@@ -201,6 +309,26 @@ pub unsafe extern "system" fn iplReflectionsBakerCancelBake(context: IPLContext)
 /// can be called with `userData`.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn iplPathBakerBake(
+    context: IPLContext,
+    params: *mut IPLPathBakeParams,
+    progressCallback: IPLProgressCallback,
+    userData: *mut c_void,
+) {
+    // SAFETY: guaranteed by the caller.
+    if let Some(v) = unsafe { context_validator(context, "bakePaths") } {
+        // SAFETY: guaranteed by the caller.
+        unsafe { validate_path_bake_params(v, params) };
+    }
+    // SAFETY: guaranteed by the caller.
+    unsafe { bake_paths(context, params, progressCallback, userData) }
+}
+
+/// [`iplPathBakerBake`] without validation.
+///
+/// # Safety
+///
+/// As [`iplPathBakerBake`].
+unsafe fn bake_paths(
     context: IPLContext,
     params: *mut IPLPathBakeParams,
     progressCallback: IPLProgressCallback,

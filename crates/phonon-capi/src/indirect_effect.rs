@@ -21,14 +21,17 @@ use steam_audio::simulation::Reverb;
 
 use crate::buffer::{RawBuffer, with_input, with_input_output, with_output};
 use crate::effects::{
-    ApiEffect, apply, create, effect_functions, effect_ref, effect_state, has_shape, order,
-    speaker_layout,
+    ApiEffect, apply, create, create_validated, effect_functions, effect_ref, effect_state,
+    has_shape, order, speaker_layout,
 };
 use crate::handle::{lock, retain_release};
 use crate::hrtf::hrtf_ref;
 use crate::rand::with_rand;
 use crate::simulator::ReflectionIr;
 use crate::types::*;
+use crate::validation::{
+    audio_effect_state, buffer_names, reflection_effect_params, reflection_effect_settings,
+};
 use crate::{from_ipl_coordinate_space, guard};
 
 // --------------------------------------------------------------------------------------------------------------------
@@ -104,11 +107,16 @@ pub unsafe extern "system" fn iplReflectionEffectCreate(
 ) -> IPLerror {
     // SAFETY: guaranteed by the caller.
     unsafe {
-        create(
+        create_validated(
             context,
             audioSettings,
             effectSettings,
             effect,
+            (
+                "createReflectionEffect",
+                "effect",
+                reflection_effect_settings,
+            ),
             |audio, settings: &IPLReflectionEffectSettings, _| {
                 let sizes = || -> Result<(usize, usize), IPLerror> {
                     let channels = usize::try_from(settings.numChannels)
@@ -243,6 +251,48 @@ pub unsafe extern "system" fn iplReflectionEffectApply(
 ) -> IPLAudioEffectState {
     guard(IPL_AUDIOEFFECTSTATE_TAILCOMPLETE, || {
         // SAFETY: guaranteed by the caller.
+        let Some((_, context)) = (unsafe { effect_ref::<_, ReflectionEffect>(effect) }) else {
+            return IPL_AUDIOEFFECTSTATE_TAILCOMPLETE;
+        };
+        let v = context.validator("apply");
+        if let Some(v) = v {
+            reflection_effect_params!(v, params, "params");
+            // SAFETY: guaranteed by the caller.
+            unsafe { v.audio_buffer(buffer_names!("in"), in_, true) };
+            if out.is_null() {
+                v.pointer("mixer", mixer);
+            } else {
+                // SAFETY: guaranteed by the caller.
+                unsafe { v.audio_buffer(buffer_names!("out"), out, false) };
+            }
+        }
+        // SAFETY: guaranteed by the caller.
+        let result = unsafe { apply_reflection_effect(effect, params, in_, out, mixer) };
+        if let Some(v) = v {
+            audio_effect_state(v, result);
+            if !out.is_null() {
+                // SAFETY: guaranteed by the caller.
+                unsafe { v.audio_buffer(buffer_names!("out"), out, true) };
+            }
+        }
+        result
+    })
+}
+
+/// [`iplReflectionEffectApply`] without validation.
+///
+/// # Safety
+///
+/// As [`iplReflectionEffectApply`].
+unsafe fn apply_reflection_effect(
+    effect: IPLReflectionEffect,
+    params: *mut IPLReflectionEffectParams,
+    in_: *mut IPLAudioBuffer,
+    out: *mut IPLAudioBuffer,
+    mixer: IPLReflectionMixer,
+) -> IPLAudioEffectState {
+    {
+        // SAFETY: guaranteed by the caller.
         let (Some((effect, _)), Some(params), Some(input)) = (
             unsafe { effect_ref::<_, ReflectionEffect>(effect) },
             unsafe { params.as_ref() },
@@ -373,7 +423,7 @@ pub unsafe extern "system" fn iplReflectionEffectApply(
             _ => return IPL_AUDIOEFFECTSTATE_TAILCOMPLETE,
         };
         state.map_or(IPL_AUDIOEFFECTSTATE_TAILCOMPLETE, effect_state)
-    })
+    }
 }
 
 /// Number of tail samples left in the effect (0 for a null handle).
@@ -481,11 +531,12 @@ pub unsafe extern "system" fn iplReflectionMixerCreate(
 ) -> IPLerror {
     // SAFETY: guaranteed by the caller.
     unsafe {
-        create(
+        create_validated(
             context,
             audioSettings,
             effectSettings,
             mixer,
+            ("createReflectionMixer", "mixer", reflection_effect_settings),
             |audio: AudioSettings, settings: &IPLReflectionEffectSettings, _| {
                 if settings.r#type != IPL_REFLECTIONEFFECTTYPE_CONVOLUTION {
                     return Ok(ReflectionMixer {
@@ -553,30 +604,61 @@ pub unsafe extern "system" fn iplReflectionMixerApply(
 ) -> IPLAudioEffectState {
     guard(IPL_AUDIOEFFECTSTATE_TAILCOMPLETE, || {
         // SAFETY: guaranteed by the caller.
+        let Some((_, context)) = (unsafe { effect_ref::<_, ReflectionMixer>(mixer) }) else {
+            return IPL_AUDIOEFFECTSTATE_TAILCOMPLETE;
+        };
+        let v = context.validator("apply");
+        if let Some(v) = v {
+            reflection_effect_params!(v, params, "params");
+            // SAFETY: guaranteed by the caller.
+            unsafe { v.audio_buffer(buffer_names!("out"), out, false) };
+        }
+        // SAFETY: guaranteed by the caller.
+        unsafe { apply_mixer(mixer, params, out) };
+        if let Some(v) = v {
+            audio_effect_state(v, IPL_AUDIOEFFECTSTATE_TAILCOMPLETE);
+            // SAFETY: guaranteed by the caller.
+            unsafe { v.audio_buffer(buffer_names!("out"), out, true) };
+        }
+        IPL_AUDIOEFFECTSTATE_TAILCOMPLETE
+    })
+}
+
+/// [`iplReflectionMixerApply`] without validation.
+///
+/// # Safety
+///
+/// As [`iplReflectionMixerApply`].
+unsafe fn apply_mixer(
+    mixer: IPLReflectionMixer,
+    params: *mut IPLReflectionEffectParams,
+    out: *mut IPLAudioBuffer,
+) {
+    {
+        // SAFETY: guaranteed by the caller.
         let (Some(mixer), Some(params), Some(output)) = (
             unsafe { mixer_ref(mixer) },
             unsafe { params.as_ref() },
             unsafe { RawBuffer::new(out) },
         ) else {
-            return IPL_AUDIOEFFECTSTATE_TAILCOMPLETE;
+            return;
         };
         let mut mixer = lock(mixer);
         let (f, channels) = (mixer.frame_size, mixer.num_channels);
         let Some(m) = mixer.mixer.as_mut() else {
-            return IPL_AUDIOEFFECTSTATE_TAILCOMPLETE;
+            return;
         };
         let Some(num_channels) = usize::try_from(params.numChannels)
             .ok()
             .filter(|&n| n <= channels && n <= output.num_channels())
         else {
-            return IPL_AUDIOEFFECTSTATE_TAILCOMPLETE;
+            return;
         };
         if output.num_samples() == f {
             // SAFETY: guaranteed by the caller.
             unsafe { with_output(&output, |out| m.apply(num_channels, out)) };
         }
-        IPL_AUDIOEFFECTSTATE_TAILCOMPLETE
-    })
+    }
 }
 
 // --------------------------------------------------------------------------------------------------------------------
