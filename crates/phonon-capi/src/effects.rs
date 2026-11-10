@@ -23,6 +23,9 @@ use crate::context::{Context, context_arc};
 use crate::handle::{Handle, lock};
 use crate::hrtf::hrtf_ref;
 use crate::types::*;
+use crate::validation::{
+    ValidateParams, ValidateSettings, Validator, audio_settings, validate_apply,
+};
 use crate::{from_ipl_coordinate_space, from_ipl_vector, guard};
 
 // --------------------------------------------------------------------------------------------------------------------
@@ -86,16 +89,47 @@ pub(crate) unsafe fn speaker_layout(layout: &IPLSpeakerLayout) -> Option<Speaker
 }
 
 /// Creates an effect: checks the context and settings like upstream's `CContext::create*Effect`, then lets `build`
-/// make the effect (returning an error status if the settings are invalid).
+/// make the effect (returning an error status if the settings are invalid). A validating context first validates the
+/// arguments as `S`'s factory method does.
 ///
 /// # Safety
 ///
 /// `context` is null or a live context, and the other pointers are null or valid.
-pub(crate) unsafe fn create<O, S, T>(
+pub(crate) unsafe fn create<O, S: ValidateSettings, T>(
     context: IPLContext,
     audio_settings: *mut IPLAudioSettings,
     effect_settings: *mut S,
     effect: *mut *mut O,
+    build: impl FnOnce(AudioSettings, &S, &Arc<Context>) -> Result<T, IPLerror>,
+) -> IPLerror {
+    // SAFETY: guaranteed by the caller.
+    unsafe {
+        create_validated(
+            context,
+            audio_settings,
+            effect_settings,
+            effect,
+            (S::METHOD, "effect", S::validate),
+            build,
+        )
+    }
+}
+
+/// How a validating context validates a factory call: upstream's method name, the name of the output argument, and
+/// the settings check.
+pub(crate) type CreateValidation<S> = (&'static str, &'static str, unsafe fn(Validator, *const S));
+
+/// [`create`] with an explicit [`CreateValidation`].
+///
+/// # Safety
+///
+/// As [`create`].
+pub(crate) unsafe fn create_validated<O, S, T>(
+    context: IPLContext,
+    audio_settings: *mut IPLAudioSettings,
+    effect_settings: *mut S,
+    effect: *mut *mut O,
+    (method, output_name, validate_settings): CreateValidation<S>,
     build: impl FnOnce(AudioSettings, &S, &Arc<Context>) -> Result<T, IPLerror>,
 ) -> IPLerror {
     guard(IPL_STATUS_FAILURE, || {
@@ -103,6 +137,12 @@ pub(crate) unsafe fn create<O, S, T>(
         let Some(context) = (unsafe { context_arc(context) }) else {
             return IPL_STATUS_FAILURE;
         };
+        if let Some(v) = context.validator(method) {
+            audio_settings!(v, audio_settings, "audioSettings");
+            // SAFETY: guaranteed by the caller.
+            unsafe { validate_settings(v, effect_settings) };
+            v.pointer(output_name, effect);
+        }
         // SAFETY: guaranteed by the caller.
         let (Some(audio), Some(settings), Some(out)) = (
             unsafe { audio_settings.as_ref() },
@@ -145,7 +185,7 @@ pub(crate) unsafe fn effect_ref<'a, O, T>(
 /// # Safety
 ///
 /// `effect` is null or a live effect holding a `Mutex<T>`, and the other pointers are null or valid.
-pub(crate) unsafe fn apply<O, T, P>(
+pub(crate) unsafe fn apply<O, T, P: ValidateParams>(
     effect: *mut O,
     params: *mut P,
     input: *mut IPLAudioBuffer,
@@ -157,16 +197,20 @@ pub(crate) unsafe fn apply<O, T, P>(
         let Some((effect, context)) = (unsafe { effect_ref::<O, T>(effect) }) else {
             return IPL_AUDIOEFFECTSTATE_TAILCOMPLETE;
         };
-        // SAFETY: guaranteed by the caller.
-        let (Some(params), Some(input), Some(output)) = (
-            unsafe { params.as_ref() },
-            unsafe { RawBuffer::new(input) },
-            unsafe { RawBuffer::new(output) },
-        ) else {
-            return IPL_AUDIOEFFECTSTATE_TAILCOMPLETE;
+        let run = || {
+            // SAFETY: guaranteed by the caller.
+            let (Some(params), Some(input), Some(output)) = (
+                unsafe { params.as_ref() },
+                unsafe { RawBuffer::new(input) },
+                unsafe { RawBuffer::new(output) },
+            ) else {
+                return IPL_AUDIOEFFECTSTATE_TAILCOMPLETE;
+            };
+            f(&mut lock(effect), params, &input, &output, context)
+                .map_or(IPL_AUDIOEFFECTSTATE_TAILCOMPLETE, effect_state)
         };
-        f(&mut lock(effect), params, &input, &output, context)
-            .map_or(IPL_AUDIOEFFECTSTATE_TAILCOMPLETE, effect_state)
+        // SAFETY: guaranteed by the caller.
+        unsafe { validate_apply(context.validator("apply"), params, input, output, run) }
     })
 }
 

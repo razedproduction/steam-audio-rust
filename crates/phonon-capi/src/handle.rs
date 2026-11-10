@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::context::Context;
+use crate::validation::Validator;
 
 #[derive(Debug)]
 pub(crate) struct Handle<T> {
@@ -91,6 +92,18 @@ impl<T> Handle<T> {
 pub(crate) unsafe fn object<'a, T, O>(ptr: *mut O) -> Option<&'a Arc<T>> {
     // SAFETY: guaranteed by the caller.
     unsafe { Handle::<T>::from_raw(ptr) }.map(Handle::get)
+}
+
+/// A validator for a call to upstream's method `method` on the object behind a handle, if it is not null and its
+/// context validates.
+///
+/// # Safety
+///
+/// `ptr` is null or a live handle holding a `T`.
+pub(crate) unsafe fn validator<T, O>(ptr: *mut O, method: &'static str) -> Option<Validator> {
+    // SAFETY: guaranteed by the caller.
+    let handle = unsafe { Handle::<T>::from_raw(ptr) }?;
+    handle.context()?.validator(method)
 }
 
 /// Locks an object, ignoring poisoning: a panic is caught at the API boundary ([`crate::guard`]), and the object is

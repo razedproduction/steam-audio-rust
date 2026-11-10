@@ -89,6 +89,15 @@ pub unsafe extern "system" fn iplEnergyFieldCreate(
         let Some(context) = (unsafe { context_arc(context) }) else {
             return IPL_STATUS_FAILURE;
         };
+        if let Some(v) = context.validator("createEnergyField") {
+            if v.pointer("settings", settings) {
+                // SAFETY: not null; valid as guaranteed by the caller.
+                let s = unsafe { &*settings };
+                v.float_if("settings->duration", s.duration, s.duration > 0.0);
+                v.int("settings->order", s.order, s.order >= 0);
+            }
+            v.pointer("energyField", energyField);
+        }
         // SAFETY: guaranteed by the caller.
         let (Some(settings), Some(out)) = (unsafe { settings.as_ref() }, unsafe {
             energyField.as_mut()

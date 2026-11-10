@@ -33,6 +33,20 @@ pub unsafe extern "system" fn iplImpulseResponseCreate(
         let Some(context) = (unsafe { context_arc(context) }) else {
             return IPL_STATUS_FAILURE;
         };
+        if let Some(v) = context.validator("createImpulseResponse") {
+            if v.pointer("settings", settings) {
+                // SAFETY: not null; valid as guaranteed by the caller.
+                let s = unsafe { &*settings };
+                v.float_if("settings->duration", s.duration, s.duration > 0.0);
+                v.int("settings->order", s.order, s.order >= 0);
+                v.int(
+                    "settings->samplingRate",
+                    s.samplingRate,
+                    s.samplingRate >= 0,
+                );
+            }
+            v.pointer("impulseResponse", impulseResponse);
+        }
         // SAFETY: guaranteed by the caller.
         let (Some(settings), Some(out)) = (unsafe { settings.as_ref() }, unsafe {
             impulseResponse.as_mut()

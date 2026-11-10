@@ -10,6 +10,7 @@ use crate::context::context_arc;
 use crate::guard;
 use crate::handle::{Handle, retain_release};
 use crate::types::*;
+use crate::validation::audio_settings;
 
 pub(crate) type Hrtf = Mutex<HrtfDatabase>;
 
@@ -36,6 +37,37 @@ pub unsafe extern "system" fn iplHRTFCreate(
         let Some(context) = (unsafe { context_arc(context) }) else {
             return IPL_STATUS_FAILURE;
         };
+        if let Some(v) = context.validator("createHRTF") {
+            audio_settings!(v, audioSettings, "audioSettings");
+            if v.pointer("hrtfSettings", hrtfSettings) {
+                // SAFETY: not null; valid as guaranteed by the caller.
+                let s = unsafe { &*hrtfSettings };
+                v.range(
+                    "IPLHRTFType",
+                    "hrtfSettings->type",
+                    s.r#type,
+                    IPL_HRTFTYPE_DEFAULT,
+                    IPL_HRTFTYPE_SOFA,
+                );
+                if s.r#type == IPL_HRTFTYPE_SOFA && s.sofaFileName.is_null() {
+                    v.pointer("hrtfSettings->sofaData", s.sofaData);
+                    v.int(
+                        "hrtfSettings->sofaDataSize",
+                        s.sofaDataSize,
+                        s.sofaDataSize > 0,
+                    );
+                }
+                v.float_if("hrtfSettings->volume", s.volume, s.volume > 0.0);
+                v.range(
+                    "IPLHRTFNormType",
+                    "hrtfSettings->normType",
+                    s.normType,
+                    IPL_HRTFNORMTYPE_NONE,
+                    IPL_HRTFNORMTYPE_RMS,
+                );
+            }
+            v.pointer("hrtf", hrtf);
+        }
         // SAFETY: guaranteed by the caller.
         let (Some(audio), Some(settings), Some(out)) = (
             unsafe { audioSettings.as_ref() },
